@@ -1,0 +1,43 @@
+version: '3.8'
+
+services:
+  golden-pit:
+    build: .
+    container_name: golden-pit-db
+    volumes:
+      # 持久化数据
+      - ./data:/app/data
+      - ./output:/app/output
+      - ./logs:/app/logs
+    environment:
+      - TZ=Asia/Shanghai
+    # 交互式运行，便于执行命令
+    stdin_open: true
+    tty: true
+    # 默认进入bash，方便手动执行命令
+    command: /bin/bash
+
+  # 可选：定时扫描服务
+  golden-pit-cron:
+    build: .
+    container_name: golden-pit-cron
+    volumes:
+      - ./data:/app/data
+      - ./output:/app/output
+      - ./logs:/app/logs
+    environment:
+      - TZ=Asia/Shanghai
+    # 每天收盘后自动扫描（A股收盘15:00）
+    command: >
+      /bin/bash -c "
+        while true; do
+          current_hour=$$(date +%H)
+          if [ \"$$current_hour\" = \"15\" ]; then
+            echo '执行定时扫描...'
+            python main.py scan
+            sleep 3600
+          fi
+          sleep 60
+        done
+      "
+    restart: unless-stopped

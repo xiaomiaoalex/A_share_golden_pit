@@ -1,0 +1,4 @@
+[individual_info_em] FAIL: ConnectionError ('Connection aborted.', RemoteDisconnected('Remote end close
+
+接收数据异常，请稍后再试。
+[bs login] 10002007

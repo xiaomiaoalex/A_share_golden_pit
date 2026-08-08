@@ -1,0 +1,63 @@
+{
+  "total": 50,
+  "rounds": [
+    {
+      "round": 1,
+      "success": 24,
+      "fail": 26,
+      "rate_first_pass": 48.0,
+      "p50_latency_s": 0.6,
+      "p95_latency_s": 0.83,
+      "error_types": {
+        "JSONDecodeError": 22,
+        "TypeError": 4
+      },
+      "failed_symbols": {
+        "600036": "JSONDecodeError(0.1s)",
+        "601318": "JSONDecodeError(0.1s)",
+        "600585": "JSONDecodeError(0.1s)",
+        "600031": "JSONDecodeError(0.1s)",
+        "600900": "JSONDecodeError(0.1s)"
+      }
+    },
+    {
+      "round": 2,
+      "success": 4,
+      "fail": 46,
+      "rate_first_pass": 8.0,
+      "p50_latency_s": 0.38,
+      "p95_latency_s": 0.72,
+      "error_types": {
+        "JSONDecodeError": 43,
+        "TypeError": 3
+      },
+      "failed_symbols": {
+        "600519": "JSONDecodeError(0.2s)",
+        "600036": "JSONDecodeError(0.1s)",
+        "601318": "JSONDecodeError(0.1s)",
+        "600585": "JSONDecodeError(0.1s)",
+        "600031": "JSONDecodeError(0.1s)"
+      }
+    },
+    {
+      "round": 3,
+      "success": 0,
+      "fail": 50,
+      "rate_first_pass": 0.0,
+      "p50_latency_s": 0,
+      "p95_latency_s": 0,
+      "error_types": {
+        "JSONDecodeError": 50
+      },
+      "failed_symbols": {
+        "600519": "JSONDecodeError(0.2s)",
+        "600036": "JSONDecodeError(0.1s)",
+        "601318": "JSONDecodeError(0.1s)",
+        "600585": "JSONDecodeError(0.2s)",
+        "600031": "JSONDecodeError(0.2s)"
+      }
+    }
+  ],
+  "overall_success_rate": 18.7,
+  "test_time": "2026-08-07 19:06:32"
+}

@@ -1,0 +1,51 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+*.egg
+
+# 虚拟环境
+venv/
+.venv/
+env/
+.env/
+
+# 缓存
+data/cache/*.pkl
+!data/cache/.gitkeep
+
+# 数据库文件
+data/db/*.db
+!data/db/.gitkeep
+
+# 日志
+logs/*.log
+!logs/.gitkeep
+
+# 输出文件
+output/reports/*
+output/dashboards/*
+!output/reports/.gitkeep
+!output/dashboards/.gitkeep
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+.docker/
+
+# 临时文件
+*.tmp
+*.bak
+/tmp/

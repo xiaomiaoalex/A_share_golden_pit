@@ -1,0 +1,10 @@
+error=JSONDecodeError
+msg=Expecting value: line 1 column 1 (char 0)
+tb=Traceback (most recent call last):
+  File "/root/.pyenv/versions/3.11.1/lib/python3.11/site-packages/requests/models.py", line 976, in json
+    return complexjson.loads(self.text, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/root/.pyenv/versions/3.11.1/lib/python3.11/site-packages/simplejson/__init__.py", line 514, in loads
+    return _default_decoder.decode(s)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/root/.pyenv/versions/3.11.1/lib/python3.11/site-packages/simplejs
