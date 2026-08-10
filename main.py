@@ -12,6 +12,7 @@ A股黄金坑股票数据库 - CLI主入口
 """
 
 import argparse
+import json
 import logging
 import re
 import sys
@@ -442,6 +443,7 @@ def build_parser() -> argparse.ArgumentParser:
         epilog="""
 示例:
   python main.py screen-tier1 --as-of 2026-08-10 --symbols 000651 600519
+  python main.py verify-tier1-sources --as-of 2026-08-10 --symbols 000651
   python main.py show-tier1 --run-id RUN_ID
   python main.py scan                  # 全量三层扫描
   python main.py scan --quick          # 快速扫描（仅Tier1）
@@ -465,6 +467,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     tier1_parser.add_argument('--limit', type=int, help='仅处理前N只，供人工验收')
     tier1_parser.add_argument('--db', default=str(settings.DB_PATH), help='SQLite数据库路径')
+
+    verify_sources_parser = subparsers.add_parser(
+        'verify-tier1-sources', help='对指定股票执行Tier1多源口径交叉验证'
+    )
+    verify_sources_parser.add_argument('--as-of', required=True, help='验证日期 YYYY-MM-DD')
+    verify_sources_parser.add_argument('--symbols', nargs='+', required=True, help='股票代码列表')
+    verify_sources_parser.add_argument('--output', help='可选JSON输出文件')
 
     show_tier1_parser = subparsers.add_parser('show-tier1', help='查看Tier1 v2某次运行结果')
     show_tier1_parser.add_argument('--run-id', required=True, help='筛选运行ID')
@@ -562,7 +571,7 @@ def _load_universe_file(path: str):
 
 
 def _run_tier1_command(args) -> None:
-    from src.data.point_in_time.akshare_adapter import AKSharePointInTimeProvider
+    from src.data.point_in_time.provider_factory import build_point_in_time_provider
     from src.screening.tier1_v2.pipeline import Tier1Pipeline
     from src.storage.tier1_repository import Tier1Repository
 
@@ -571,9 +580,7 @@ def _run_tier1_command(args) -> None:
     from config.tier1 import Tier1Config
 
     tier1_config = Tier1Config()
-    provider = AKSharePointInTimeProvider(
-        current_window_days=tier1_config.current_supplier_window_days
-    )
+    provider = build_point_in_time_provider(tier1_config)
     if as_of_date > provider.today:
         raise ValueError("--as-of 不得晚于当前日期")
     historical = (
@@ -587,12 +594,18 @@ def _run_tier1_command(args) -> None:
         )
     universe_items = _load_universe_file(args.universe_file) if args.universe_file else None
     symbols = [_normalize_symbol(value) for value in args.symbols] if args.symbols else None
-    result = Tier1Pipeline(provider, repository, tier1_config).run(
-        as_of_date,
-        symbols=symbols,
-        universe_items=universe_items,
-        limit=args.limit,
-    )
+    try:
+        result = Tier1Pipeline(provider, repository, tier1_config).run(
+            as_of_date,
+            symbols=symbols,
+            universe_items=universe_items,
+            limit=args.limit,
+        )
+    finally:
+        provider.close()
+    print(f"data_sources: {provider.provider_names}")
+    for warning in provider.configuration_warnings:
+        print(f"source_warning: {warning}")
     print(f"run_id: {result['run_id']}")
     print(f"status: {result['status']}")
     print(f"universe_size: {result.get('universe_size', 0)}")
@@ -616,6 +629,37 @@ def _show_tier1_command(args) -> None:
         'secondary_queues_json',
     ]
     print(pd.DataFrame(rows)[columns].to_string(index=False))
+
+
+def _verify_tier1_sources_command(args) -> None:
+    from config.tier1 import Tier1Config
+    from src.data.point_in_time.provider_factory import build_point_in_time_provider
+    from src.data.point_in_time.reconciliation import verify_symbol_sources
+
+    as_of_date = _parse_as_of(args.as_of)
+    config = Tier1Config()
+    provider = build_point_in_time_provider(config)
+    if as_of_date > provider.today:
+        provider.close()
+        raise ValueError("--as-of 不得晚于当前日期")
+    try:
+        reports = [
+            verify_symbol_sources(provider.providers, _normalize_symbol(symbol), as_of_date)
+            for symbol in args.symbols
+        ]
+    finally:
+        provider.close()
+    output = {
+        "configured_sources": provider.provider_names,
+        "configuration_warnings": provider.configuration_warnings,
+        "reports": reports,
+    }
+    serialized = json.dumps(output, ensure_ascii=False, indent=2)
+    if args.output:
+        Path(args.output).write_text(serialized + "\n", encoding="utf-8")
+        print(f"多源验证结果已写入: {args.output}")
+    else:
+        print(serialized)
 
 
 def _migrate_tier1_command(args) -> None:
@@ -646,6 +690,9 @@ def main():
             return
         if args.command == 'show-tier1':
             _show_tier1_command(args)
+            return
+        if args.command == 'verify-tier1-sources':
+            _verify_tier1_sources_command(args)
             return
         if args.command == 'tier1-migrate':
             _migrate_tier1_command(args)

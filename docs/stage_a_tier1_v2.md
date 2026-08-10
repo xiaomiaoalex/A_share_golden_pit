@@ -58,8 +58,46 @@ Q4=年报累计-前三季累计` 还原单季度。同比使用同一自然季�
   状态会保持 `PENDING_DATA`，不会按“非ST”放行。
 
 备用数据源链只补数据，不改变口径或阈值；返回值保留所有尝试的状态轨迹。
-当前CLI生产配置仅启用AKShare，因为尚未确认第二个免费数据源能在全部点时口径上
-等价。可通过 `FallbackPointInTimeProvider` 注入经验证的备用适配器。
+
+### 4.1 生产多源链
+
+| 顺序 | 来源 | 可用于硬筛选的已验证字段 | 明确限制 |
+|---|---|---|---|
+| 1 | AKShare/东方财富 | 行情、PE、正式利润表、分红；深市历史简称 | 沪市/北交所历史ST覆盖不足 |
+| 2 | Tushare Pro | 点时股票池、收盘价、PE、总市值、总股本、`revenue`、`n_income_attr_p`、`cash_div_tax`、每日历史ST列表 | 需要Tushare权限和`TUSHARE_TOKEN`；`stock_st`仅覆盖2016年以来 |
+| 3 | BaoStock | 沪深未复权收盘价、`peTTM`、每日`isST`、`dividCashPsBeforeTax`、送转比例 | 不覆盖北交所；不提供满足本项目定义的精确财报字段组合 |
+
+Tushare每日指标的总市值单位为万元、总股本单位为万股，入库前分别乘以10,000；
+财报只接受累计合并口径的 `revenue`（营业收入）和 `n_income_attr_p`
+（归母净利润），且实际公告日不得晚于as-of。分红只接受实施方案中的税前每股现金
+和除权日。BaoStock行情固定使用 `adjustflag=3` 未复权收盘价；其
+`MBRevenue/netProfit` 不等同于本项目要求的营业收入/归母净利润，因此适配器明确
+返回不支持，不做近似替换。
+
+字段定义依据：
+
+- [Tushare每日指标](https://tushare.pro/document/2?doc_id=32)
+- [Tushare利润表](https://tushare.pro/document/2?doc_id=33)
+- [Tushare分红送股](https://tushare.pro/document/2?doc_id=103)
+- [Tushare历史名称](https://tushare.pro/document/2?doc_id=100)
+- [Tushare历史ST列表](https://tushare.pro/document/2?doc_id=397)
+- [Tushare股票基础信息](https://tushare.pro/document/2?doc_id=25)
+- [BaoStock Python API](https://baostock.com/baostock/index.php/Python_API%E6%96%87%E6%A1%A3)
+
+配置方式：
+
+```powershell
+$env:TIER1_DATA_SOURCES = "akshare,tushare,baostock"
+$env:TUSHARE_TOKEN = "在本机环境变量中设置，不写入仓库"
+```
+
+未配置Tushare令牌时，CLI会明确输出Tushare未启用，而不是静默假装三源可用。
+以下命令让各来源独立取数并比较同交易日PE/收盘价、同报告期财务值、TTM分红
+和ST状态；差异只形成 `PASS/WARN/INSUFFICIENT` 质量结论，不改变筛选阈值：
+
+```bash
+python main.py verify-tier1-sources --as-of 2026-08-10 --symbols 000651
+```
 
 ## 5. 数据库迁移
 
@@ -91,7 +129,8 @@ python -m ruff check --select F main.py config/tier1.py src/data/point_in_time s
 
 覆盖严格边界、跨年连续窗口、累计转单季、未来公告/修订排除、非正利润基数、
 所有无效数值不放行、主源失败后备用源补充、全部源失败、送转复权防重算、
-迁移/回滚不破坏旧表，以及从数据契约到数据库决策的端到端合成测试。
+迁移/回滚不破坏旧表、Tushare/BaoStock单位和能力边界、多源差异告警，以及从
+数据契约到数据库决策的端到端合成测试。
 
 真实源测试与单元测试隔离，只有显式启用才访问网络：
 

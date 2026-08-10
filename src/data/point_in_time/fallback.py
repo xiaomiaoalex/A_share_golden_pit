@@ -14,11 +14,22 @@ from .contracts import DataEnvelope, FetchStatus
 
 
 class FallbackPointInTimeProvider:
-    def __init__(self, *providers):
+    def __init__(self, *providers, configuration_warnings=None):
         if not providers:
             raise ValueError("至少需要一个点时数据提供方")
         self.providers = providers
         self.today = providers[0].today
+        self.configuration_warnings = list(configuration_warnings or [])
+
+    @property
+    def provider_names(self) -> list[str]:
+        return [provider.provider_name for provider in self.providers]
+
+    def close(self) -> None:
+        for provider in self.providers:
+            close = getattr(provider, "close", None)
+            if callable(close):
+                close()
 
     @staticmethod
     def exchange_for(symbol: str) -> str:

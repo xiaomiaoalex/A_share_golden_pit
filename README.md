@@ -26,6 +26,9 @@ Tier1 v2已经与旧三层调用链隔离。它只在五项硬条件全部明确
 # 当前或指定股票筛选
 python main.py screen-tier1 --as-of 2026-08-10 --symbols 000651 600519
 
+# 对各来源执行字段口径与数值交叉验证（不改变筛选结论）
+python main.py verify-tier1-sources --as-of 2026-08-10 --symbols 000651
+
 # 历史全市场回扫必须提供当时的点时股票池，避免幸存者偏差
 python main.py screen-tier1 --as-of 2020-12-31 --universe-file universe_20201231.csv
 
@@ -309,11 +312,14 @@ golden-pit-db/
 
 | 数据源 | 用途 | 优先级 |
 |--------|------|--------|
-| **AKShare** | 实时行情、财务指标、K线、分红 | 主数据源 |
-| **baostock** | 分红、成长/盈利/营运/偿债能力 | 备用数据源 |
+| **AKShare/东方财富** | Tier1行情、正式利润表、分红；深市历史简称 | 第一源 |
+| **Tushare Pro** | 点时股票池、PE/市值、营业收入、归母净利润、税前分红、历史ST状态 | 第二源（需`TUSHARE_TOKEN`） |
+| **BaoStock** | 沪深历史行情、PE、每日ST状态、税前分红和送转 | 第三源 |
 | **SQLite** | 本地持久化存储 | 本地 |
 
-> **注意**：AKShare 和 baostock 均为免费开源数据源，数据来自公开渠道。建议配合公司公告、年报、券商研报进行交叉验证。
+默认顺序由 `TIER1_DATA_SOURCES=akshare,tushare,baostock` 控制。Tushare令牌
+只从环境变量读取；未配置时明确提示并继续使用第一、第三源。BaoStock没有精确的
+“累计营业收入+归母净利润”组合，因此禁止用其近似财务字段补充季度趋势。
 
 ---
 
