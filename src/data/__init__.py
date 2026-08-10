@@ -6,7 +6,17 @@ A股黄金坑股票数据库 - 数据获取层。
 - CacheManager: 本地缓存管理
 """
 
-from .fetcher import DataFetcher
-from .cache import CacheManager
-
 __all__ = ["DataFetcher", "CacheManager"]
+
+
+def __getattr__(name):
+    """延迟加载旧数据门面，避免独立点时模块被可选数据源阻塞。"""
+    if name == "DataFetcher":
+        from .fetcher import DataFetcher
+
+        return DataFetcher
+    if name == "CacheManager":
+        from .cache import CacheManager
+
+        return CacheManager
+    raise AttributeError(name)
