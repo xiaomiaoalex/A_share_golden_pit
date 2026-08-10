@@ -8,6 +8,7 @@ from http import HTTPStatus
 from pathlib import Path
 from typing import Any
 
+from config.tier1 import Tier1Config
 from src.storage.tier2_repository import Tier2Repository
 from src.storage.tier3_repository import Tier3Repository
 from src.strategies.contracts import StrategyDescriptor, StrategyOperation
@@ -18,16 +19,16 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 
 class GoldenPitStrategy:
-    """Composition boundary for the adjustable Stage A/B/C strategy."""
+    """Composition boundary for the adjustable three-phase strategy."""
 
     descriptor = StrategyDescriptor(
         strategy_id="golden-pit",
-        name="黄金坑 Stage A/B/C",
+        name="黄金坑三阶段策略",
         short_name="黄金坑",
         description="低估值、高分红与趋势改善初筛，叠加证据研究和行业化风险终审。",
-        version="tier1-v2.1.0",
+        version=Tier1Config().calculation_version,
         ui_module="/strategies/golden-pit.js",
-        stages=("客观初筛", "证据研究", "风险终审"),
+        stages=("量化初筛", "证据研究", "风险终审"),
         capabilities=("全市场筛选", "断点续跑", "数据缺口补跑", "人工复核"),
         accent="emerald",
     )
@@ -142,7 +143,7 @@ class GoldenPitStrategy:
         return StrategyOperation(
             kind="job",
             status=HTTPStatus.ACCEPTED,
-            label="黄金坑 Stage B 证据包",
+            label="黄金坑证据研究 · 证据包",
             command=tuple(command),
         )
 

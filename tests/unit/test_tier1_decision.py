@@ -3,6 +3,7 @@ from datetime import date
 
 import pytest
 
+from config.tier1 import Tier1Config
 from src.screening.tier1_v2.contracts import BusinessStatus, DataStatus
 from src.screening.tier1_v2.decision import DecisionInput, evaluate_tier1
 from tests.fixtures.tier1_synthetic import improving_window
@@ -22,7 +23,7 @@ def decision_input(**overrides):
         dividend_ttm_raw_per_share=0.6,
         dividend_ttm_adjusted_per_share=0.6,
         risk_warning=False,
-        quarterly_window=improving_window(),
+        quarterly_window=improving_window()[-2:],
     )
     values.update(overrides)
     return DecisionInput(**values)
@@ -49,12 +50,53 @@ def test_strict_boundaries_fail(field, value, condition):
     assert condition in {item["condition"] for item in result.failed_conditions}
 
 
-def test_equal_adjacent_growth_fails():
-    window = improving_window()
-    window[2] = type(window[2])(
-        **{**window[2].__dict__, "revenue_yoy": window[1].revenue_yoy}
+def test_equal_positive_growth_passes_without_strict_improvement():
+    window = improving_window()[-2:]
+    window[1] = type(window[1])(
+        **{
+            **window[1].__dict__,
+            "revenue_yoy": window[0].revenue_yoy,
+            "parent_np_yoy": window[0].parent_np_yoy,
+        }
     )
     result = evaluate_tier1(decision_input(quarterly_window=window))
+
+    assert result.screen_status == "PASS"
+
+
+@pytest.mark.parametrize(
+    "field,condition",
+    [
+        ("revenue_yoy", "revenue_yoy_consecutive_positive"),
+        ("parent_np_yoy", "parent_np_yoy_consecutive_positive"),
+    ],
+)
+def test_non_positive_growth_in_either_recent_quarter_fails(field, condition):
+    for index in (0, 1):
+        window = improving_window()[-2:]
+        window[index] = replace(window[index], **{field: 0.0})
+        result = evaluate_tier1(decision_input(quarterly_window=window))
+
+        assert result.screen_status == "FAIL"
+        assert condition in {
+            item["condition"] for item in result.failed_conditions
+        }
+
+
+def test_legacy_config_keeps_three_quarter_strict_improvement_rule():
+    window = improving_window()
+    window[2] = replace(window[2], revenue_yoy=window[1].revenue_yoy)
+    config = Tier1Config(
+        trend_quarters=3,
+        trend_rule="STRICT_IMPROVEMENT",
+        strict_improvement=True,
+        calculation_version="tier1-v2.1.0",
+    )
+
+    result = evaluate_tier1(
+        decision_input(quarterly_window=window), config
+    )
+
     assert result.screen_status == "FAIL"
     assert "revenue_yoy_strictly_improving" in {
         item["condition"] for item in result.failed_conditions
@@ -62,9 +104,9 @@ def test_equal_adjacent_growth_fails():
 
 
 def test_negative_profit_base_enters_turnaround_watchlist():
-    window = improving_window()
-    window[1] = type(window[1])(
-        **{**window[1].__dict__, "prior_year_parent_np_single": -1, "parent_np_yoy": None}
+    window = improving_window()[-2:]
+    window[0] = type(window[0])(
+        **{**window[0].__dict__, "prior_year_parent_np_single": -1, "parent_np_yoy": None}
     )
     result = evaluate_tier1(decision_input(quarterly_window=window))
     assert result.business_status == BusinessStatus.NOT_COMPARABLE
@@ -109,8 +151,8 @@ def test_invalid_dividend_never_passes(bad):
 
 @pytest.mark.parametrize("bad", [None, float("nan"), float("inf"), ""])
 def test_invalid_quarterly_growth_never_passes(bad):
-    window = improving_window()
-    window[1] = replace(window[1], revenue_yoy=bad, parent_np_yoy=bad)
+    window = improving_window()[-2:]
+    window[0] = replace(window[0], revenue_yoy=bad, parent_np_yoy=bad)
     result = evaluate_tier1(decision_input(quarterly_window=window))
     assert result.screen_status == "PENDING_DATA"
 

@@ -84,7 +84,7 @@ function renderAll() {
   $('#kpiReview').textContent = fmt.format(d.summary.pending_review || 0);
   $('#kpiStageC').textContent = fmt.format(d.summary.stage_c_pass || 0);
   const rate = d.summary.universe ? d.summary.stage_a_pass / d.summary.universe * 100 : 0;
-  $('#kpiStageARate').textContent = `${fmt.format(rate)}% 严格硬条件通过率`;
+  $('#kpiStageARate').textContent = `${fmt.format(rate)}% 量化初筛通过率`;
   const status = run?.status || 'EMPTY';
   $('#runStatus').textContent = statusLabels[status] || status;
   $('#runStatus').className = `status-pill ${status}`;
@@ -254,14 +254,17 @@ function openDrawer(symbol) {
   $('#drawerSymbol').textContent = `${c.symbol} · 研究时点 ${state.data.run.as_of_date}`;
   const pePass = c.pe_ttm != null && c.pe_ttm < 15;
   const divPass = c.dividend_yield != null && c.dividend_yield > .05;
-  const revPass = strictlyImproving(c.revenue_yoy);
-  const profitPass = strictlyImproving(c.profit_yoy);
+  const legacyStrict = Boolean(state.data.run?.config?.strict_improvement) || state.data.run?.config?.trend_rule === 'STRICT_IMPROVEMENT';
+  const revPass = trendPass(c.revenue_yoy);
+  const profitPass = trendPass(c.profit_yoy);
+  const revenueRule = legacyStrict ? '营收同比严格逐季改善' : '营收同比连续两个季度正增长';
+  const profitRule = legacyStrict ? '归母净利润同比严格逐季改善' : '归母净利润同比连续两个季度正增长';
   $('#drawerBody').innerHTML = `
     <section class="detail-section"><h3>核心指标</h3><div class="detail-kpis"><div class="detail-kpi"><span>PE (TTM)</span><strong>${number(c.pe_ttm, '×')}</strong></div><div class="detail-kpi"><span>股息率 TTM</span><strong>${percent(c.dividend_yield)}</strong></div><div class="detail-kpi"><span>风险警示</span><strong>${c.risk_warning ? '是' : '否'}</strong></div></div></section>
     <section class="detail-section"><h3>连续单季度同比趋势</h3>${trendChart(c)}<div class="chart-legend"><span><i></i>营业收入</span><span class="profit"><i></i>归母净利润</span></div></section>
-    <section class="detail-section"><h3>Stage A 硬条件</h3><div class="condition-list">${condition('PE (TTM) < 15', pePass, number(c.pe_ttm, '×'))}${condition('税前股息率 (TTM) > 5%', divPass, percent(c.dividend_yield))}${condition('营收同比严格逐季改善', revPass, sequence(c.revenue_yoy))}${condition('归母净利润同比严格逐季改善', profitPass, sequence(c.profit_yoy))}${condition('非 ST / 风险警示', !c.risk_warning, c.risk_warning ? '风险警示' : '正常')}</div></section>
+    <section class="detail-section"><h3>量化初筛条件</h3><div class="condition-list">${condition('PE (TTM) < 15', pePass, number(c.pe_ttm, '×'))}${condition('税前股息率 (TTM) > 5%', divPass, percent(c.dividend_yield))}${condition(revenueRule, revPass, sequence(c.revenue_yoy))}${condition(profitRule, profitPass, sequence(c.profit_yoy))}${condition('非 ST / 风险警示', !c.risk_warning, c.risk_warning ? '风险警示' : '正常')}</div></section>
     ${c.quality_warnings.length ? `<section class="detail-section"><h3>数据提示</h3><ul class="warning-list">${c.quality_warnings.map(item => `<li>${esc(item)}</li>`).join('')}</ul></section>` : ''}
-    <section class="detail-section"><h3>研究阶段</h3><div class="stage-timeline">${stageLine('A', '客观初筛', c.screen_status)}${stageLine('B', '证据研究', c.stage_b_status)}${stageLine('C', '风险终审', c.stage_c_status)}</div></section>`;
+    <section class="detail-section"><h3>研究阶段</h3><div class="stage-timeline">${stageLine('A', '量化初筛', c.screen_status)}${stageLine('B', '证据研究', c.stage_b_status)}${stageLine('C', '风险终审', c.stage_c_status)}</div></section>`;
   renderDrawerFooter(c);
   $('#detailDrawer').classList.add('open'); $('#detailDrawer').setAttribute('aria-hidden', 'false'); $('#scrim').classList.add('open');
 }
@@ -269,13 +272,13 @@ function openDrawer(symbol) {
 function renderDrawerFooter(c) {
   const footer = $('#drawerFooter');
   if (c.stage_b_status === '待生成证据包') {
-    footer.innerHTML = '<button class="primary-button" id="exportTier2">生成 Stage B 证据包</button>';
+    footer.innerHTML = '<button class="primary-button" id="exportTier2">生成证据研究包</button>';
     $('#exportTier2').addEventListener('click', () => exportTier2([c.symbol]));
   } else if (c.stage_b_status === '待人工复核') {
-    footer.innerHTML = '<button class="primary-button" id="reviewB">提交 Stage B 复核</button>';
+    footer.innerHTML = '<button class="primary-button" id="reviewB">提交证据研究复核</button>';
     $('#reviewB').addEventListener('click', () => openReview('B', c));
   } else if (c.stage_c_status === '待人工复核') {
-    footer.innerHTML = '<button class="primary-button" id="reviewC">提交 Stage C 终审</button>';
+    footer.innerHTML = '<button class="primary-button" id="reviewC">提交风险终审</button>';
     $('#reviewC').addEventListener('click', () => openReview('C', c));
   } else {
     footer.innerHTML = '<button class="secondary-button" id="drawerCloseAction">关闭详情</button>';
@@ -290,7 +293,7 @@ function openReview(stage, c) {
   form.elements.stage.value = stage; form.elements.symbol.value = c.symbol;
   form.elements.assessment_id.value = c.stage_b.assessment_id || '';
   form.elements.risk_assessment_id.value = c.stage_c.risk_assessment_id || '';
-  $('#reviewStage').textContent = `STAGE ${stage} · HUMAN REVIEW`;
+  $('#reviewStage').textContent = `${stage === 'B' ? '证据研究' : '风险终审'} · HUMAN REVIEW`;
   $('#reviewTitle').textContent = `${c.stock_name} 人工复核`;
   const system = stage === 'B' ? c.stage_b.system_recommendation : c.stage_c.system_status;
   [...form.elements.decision.options].forEach(option => { option.disabled = rank(option.value) > rank(system); });
@@ -355,7 +358,7 @@ async function loadJobs() {
       : job);
     for (; runIndex < runningRuns.length; runIndex++) {
       const run = runningRuns[runIndex];
-      jobs.push({job_id:`run:${run.run_id}`, label:`${run.as_of_date} 全市场 Stage A 筛选`, status:'RUNNING', output:'', progress:run.progress});
+      jobs.push({job_id:`run:${run.run_id}`, label:`${run.as_of_date} 全市场量化初筛`, status:'RUNNING', output:'', progress:run.progress});
     }
     $('#jobsPanel').classList.toggle('hidden', !jobs.length);
     $('#jobList').innerHTML = jobs.map(job => `<div class="job-row"><strong>${esc(job.label)}</strong>${badge(job.status)}${job.status === 'RUNNING' ? progressMarkup(job.progress, true) : ''}${job.output ? `<p>${esc(job.output)}</p>` : (job.status === 'RUNNING' ? '<p class="job-hint">正在持续写入正式筛选结果，进度每 4 秒更新。</p>' : '')}</div>`).join('');
@@ -413,6 +416,8 @@ function sourceHealthMarkup(health) {
   return `<div class="source-health-banner ${esc(health.status)} ${esc(health.severity)}"><i>${icons[health.status] || '•'}</i><div><strong>${esc(health.label)}</strong><p>${esc(health.message)}</p>${lastError ? `<small>${esc(lastError)}</small>` : ''}</div><span>${esc(idle)}</span></div>`;
 }
 function strictlyImproving(values) { return Array.isArray(values) && values.length >= 3 && values.every((v,i) => i === 0 || v > values[i-1]); }
+function consecutivePositive(values) { return Array.isArray(values) && values.length === 2 && values.every(value => value != null && value > 0); }
+function trendPass(values) { return state.data?.run?.config?.strict_improvement || state.data?.run?.config?.trend_rule === 'STRICT_IMPROVEMENT' ? strictlyImproving(values) : consecutivePositive(values); }
 function rank(value) { return ({REJECT:0, REVIEW:1, PASS:2})[value] ?? -1; }
 function groupLabel(group) { return ({universe:'股票池',market:'行情估值',financial_statements:'财务报表',dividend_and_actions:'分红与公司行动',risk_warning_status:'风险警示'})[group] || group; }
 function issueText(item) { return item.issues?.map(i => i.message).join('；') || '未发现问题'; }
@@ -425,7 +430,7 @@ function sparkline(values) {
   const pts=values.map((v,i)=>[p+i*(w-2*p)/Math.max(values.length-1,1),h-p-(v-min)/range*(h-2*p)]);
   const line=pts.map((q,i)=>`${i?'L':'M'}${q[0].toFixed(1)},${q[1].toFixed(1)}`).join(' ');
   const area=`${line} L${pts.at(-1)[0]},${h} L${pts[0][0]},${h} Z`;
-  return `<svg class="sparkline ${strictlyImproving(values)?'':'bad'}" viewBox="0 0 ${w} ${h}"><path class="area" d="${area}"/><path class="line" d="${line}"/></svg>`;
+  return `<svg class="sparkline ${trendPass(values)?'':'bad'}" viewBox="0 0 ${w} ${h}"><path class="area" d="${area}"/><path class="line" d="${line}"/></svg>`;
 }
 
 function trendChart(c) {

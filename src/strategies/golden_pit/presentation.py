@@ -1,4 +1,4 @@
-"""Read model for the Stage A/B/C golden-pit strategy.
+"""Read model for the golden-pit three-phase strategy.
 
 The web layer intentionally reads the formal SQLite schema instead of creating a
 parallel application database.  All state-changing reviews are delegated to the
@@ -114,8 +114,8 @@ class GoldenPitReadModel:
                 "pipeline": [
                     {
                         "key": "A",
-                        "name": "客观初筛",
-                        "caption": "估值 · 分红 · 趋势 · ST",
+                        "name": "量化初筛",
+                        "caption": "估值 · 分红 · 连续两季正增长 · 风险警示",
                         "total": len(candidates),
                         "passed": stage_a_pass,
                     },
@@ -141,7 +141,7 @@ class GoldenPitReadModel:
             }
 
     def running_runs(self) -> list[dict[str, Any]]:
-        """Return live Stage A runs with database-backed progress."""
+        """Return live quantitative-screening runs with database-backed progress."""
         with self.connect() as connection:
             tables = self._tables(connection)
             if "screening_runs" not in tables:
@@ -700,7 +700,7 @@ class GoldenPitReadModel:
                 events.append(
                     {
                         "type": "review",
-                        "title": f"{row['symbol']} 完成 Stage B 复核",
+                        "title": f"{row['symbol']} 完成证据研究复核",
                         "detail": f"{row['reviewer']} · {row['decision']}",
                         "time": row["reviewed_at"],
                     }
@@ -715,7 +715,7 @@ class GoldenPitReadModel:
                 events.append(
                     {
                         "type": "review",
-                        "title": f"{row['symbol']} 完成 Stage C 终审",
+                        "title": f"{row['symbol']} 完成风险终审",
                         "detail": f"{row['reviewer']} · {row['decision']}",
                         "time": row["reviewed_at"],
                     }
@@ -729,7 +729,7 @@ class GoldenPitReadModel:
         if recovery.get("can_resume"):
             return {
                 "key": "resume-tier1",
-                "title": "从 Stage A 断点继续",
+                "title": "从量化初筛断点继续",
                 "detail": (
                     f"将跳过已完成标的，继续处理 "
                     f"{recovery.get('unfinished_count', 0)} 只未完成股票。"
@@ -738,29 +738,29 @@ class GoldenPitReadModel:
         if recovery.get("can_retry_data"):
             return {
                 "key": "retry-tier1-data",
-                "title": "补跑 Stage A 数据缺口",
+                "title": "补跑量化初筛数据缺口",
                 "detail": (
                     f"有 {recovery.get('data_gap_count', 0)} 只股票未产生有效决策"
                     "或处于数据异常状态。"
                 ),
             }
         if run.get("status") not in {"FINISHED", "FINISHED_WITH_ERRORS"}:
-            return {"key": "wait", "title": "Stage A 正在运行", "detail": "完成后可继续证据研究。"}
+            return {"key": "wait", "title": "量化初筛正在运行", "detail": "完成后可继续证据研究。"}
         passed = [row for row in candidates if row["screen_status"] == "PASS"]
         if not passed:
             return {"key": "complete", "title": "本次没有通过硬筛的候选", "detail": "可查看失败条件，或启动新的点时筛选。"}
         waiting_package = [row for row in passed if row["stage_b_status"] == "待生成证据包"]
         if waiting_package:
-            return {"key": "export-tier2", "title": f"为 {len(waiting_package)} 只候选生成证据包", "detail": "进入 Stage B 前，先固化可复核证据与来源快照。"}
+            return {"key": "export-tier2", "title": f"为 {len(waiting_package)} 只候选生成证据包", "detail": "进入证据研究前，先固化可复核证据与来源快照。"}
         if any(row["stage_b_status"] == "待AI研究" for row in passed):
-            return {"key": "import-tier2", "title": "等待 Stage B 研究结果", "detail": "完成研究 JSON 后，通过 CLI 校验并导入。"}
+            return {"key": "import-tier2", "title": "等待证据研究结果", "detail": "完成研究 JSON 后，通过 CLI 校验并导入。"}
         if any(row["stage_b_status"] == "待人工复核" for row in passed):
-            return {"key": "review-tier2", "title": "处理 Stage B 人工复核", "detail": "人工结论只能维持或下调系统建议。"}
+            return {"key": "review-tier2", "title": "处理证据研究人工复核", "detail": "人工结论只能维持或下调系统建议。"}
         stage_b_pass = [row for row in passed if row["stage_b_status"] == "PASS"]
         if any(row["stage_c_status"] == "待风险研究" for row in stage_b_pass):
-            return {"key": "tier3", "title": "准备 Stage C 行业化风险研究", "detail": "补充行业分类后导出风险研究模板。"}
+            return {"key": "tier3", "title": "准备行业化风险终审", "detail": "补充行业分类后导出风险研究模板。"}
         if any(row["stage_c_status"] == "待人工复核" for row in stage_b_pass):
-            return {"key": "review-tier3", "title": "处理 Stage C 人工终审", "detail": "复核硬否决、风险警告与价值陷阱信号。"}
+            return {"key": "review-tier3", "title": "处理风险终审人工复核", "detail": "复核硬否决、风险警告与价值陷阱信号。"}
         return {"key": "complete", "title": "本次工作流已完成", "detail": "所有可进入候选均已形成最终状态。"}
 
     @staticmethod

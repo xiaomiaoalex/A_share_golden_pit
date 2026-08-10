@@ -97,9 +97,9 @@
 
         <div class="kpi-grid">
           <article class="kpi-card accent-dark"><div class="kpi-icon"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/><path d="M8 11h6M11 8v6"/></svg></div><span>本期覆盖</span><strong id="kpiUniverse">—</strong><small>只股票进入点时筛选</small></article>
-          <article class="kpi-card"><div class="kpi-icon green"><svg viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></svg></div><span>Stage A 通过</span><strong id="kpiStageA">—</strong><small id="kpiStageARate">严格硬条件筛选</small></article>
+          <article class="kpi-card"><div class="kpi-icon green"><svg viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></svg></div><span>量化初筛通过</span><strong id="kpiStageA">—</strong><small id="kpiStageARate">量化条件通过率</small></article>
           <article class="kpi-card"><div class="kpi-icon amber"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></div><span>待人工判断</span><strong id="kpiReview">—</strong><small>需要研究员确认</small></article>
-          <article class="kpi-card"><div class="kpi-icon gold"><svg viewBox="0 0 24 24"><path d="M6 3h12v5c0 4-2.7 7-6 7s-6-3-6-7V3Z"/><path d="M8 21h8M12 15v6M6 6H3v2c0 2 1.5 4 4 4M18 6h3v2c0 2-1.5 4-4 4"/></svg></div><span>最终研究池</span><strong id="kpiStageC">—</strong><small>完成 Stage C 终审</small></article>
+          <article class="kpi-card"><div class="kpi-icon gold"><svg viewBox="0 0 24 24"><path d="M6 3h12v5c0 4-2.7 7-6 7s-6-3-6-7V3Z"/><path d="M8 21h8M12 15v6M6 6H3v2c0 2 1.5 4 4 4M18 6h3v2c0 2 1.5 4 4 4"/></svg></div><span>最终研究池</span><strong id="kpiStageC">—</strong><small>完成风险终审</small></article>
         </div>
 
         <div class="overview-grid">
@@ -114,7 +114,7 @@
 
         <article class="panel candidates-panel">
           <div class="panel-header table-heading"><div><span class="panel-kicker">CANDIDATE RADAR</span><h2>候选雷达</h2></div><button class="text-button" data-goto="candidates">查看全部 <span>→</span></button></div>
-          <div class="table-wrap"><table><thead><tr><th>公司 / 代码</th><th>筛选结论</th><th>PE (TTM)</th><th>股息率</th><th>营收趋势</th><th>Stage B</th><th></th></tr></thead><tbody id="overviewCandidates"></tbody></table></div>
+          <div class="table-wrap"><table><thead><tr><th>公司 / 代码</th><th>量化初筛</th><th>PE (TTM)</th><th>股息率</th><th>营收趋势</th><th>证据研究</th><th></th></tr></thead><tbody id="overviewCandidates"></tbody></table></div>
           <div class="empty-state hidden" id="overviewEmpty"><div class="empty-icon"><svg viewBox="0 0 24 24"><path d="M4 19V9M10 19V5M16 19v-7M22 19H2"/></svg></div><h3>本批次暂无候选记录</h3><p>启动新筛选后，结果会在这里按状态展示。</p></div>
         </article>
       </section>
@@ -124,21 +124,21 @@
         <div class="candidate-toolbar panel">
           <div class="toolbar-primary"><div class="search-box"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg><input id="candidateSearch" placeholder="搜索公司名称或股票代码"></div><div class="toolbar-result"><span class="active-filter-count hidden" id="activeFilterCount">0 项筛选</span><span class="result-count" id="candidateCount">0 条结果</span><button class="reset-filters hidden" id="resetFilters"><svg viewBox="0 0 24 24"><path d="M4 7h16M7 12h10M10 17h4"/></svg>重置</button></div></div>
           <div class="column-filter-grid">
-            <label><span>Stage A</span><select data-filter-key="stageA"><option value="ALL">全部状态</option><option value="PASS">通过</option><option value="FAIL">未通过</option><option value="DATA_ERROR">数据异常</option><option value="PENDING_DATA">数据待补</option><option value="TURNAROUND_WATCHLIST">反转观察</option><option value="NOT_COMPARABLE">不可比</option></select></label>
+            <label><span>量化初筛</span><select data-filter-key="stageA"><option value="ALL">全部状态</option><option value="PASS">通过</option><option value="FAIL">未通过</option><option value="DATA_ERROR">数据异常</option><option value="PENDING_DATA">数据待补</option><option value="TURNAROUND_WATCHLIST">反转观察</option><option value="NOT_COMPARABLE">不可比</option></select></label>
             <label><span>数据状态</span><select data-filter-key="data"><option value="ALL">全部状态</option><option value="COMPLETE">数据完整</option><option value="PARTIAL">部分数据</option><option value="ERROR">数据异常</option></select></label>
             <label><span>PE (TTM)</span><select data-filter-key="pe"><option value="ALL">全部区间</option><option value="LT15">低于 15×</option><option value="15TO30">15×–30×</option><option value="GTE30">30×及以上</option><option value="MISSING">数据缺失</option></select></label>
             <label><span>股息率</span><select data-filter-key="dividend"><option value="ALL">全部区间</option><option value="GT5">高于 5%</option><option value="2TO5">2%–5%</option><option value="LT2">低于 2%</option><option value="MISSING">数据缺失</option></select></label>
-            <label><span>Stage B</span><select data-filter-key="stageB" id="stageBFilter"><option value="ALL">全部状态</option></select></label>
-            <label><span>Stage C</span><select data-filter-key="stageC" id="stageCFilter"><option value="ALL">全部状态</option></select></label>
+            <label><span>证据研究</span><select data-filter-key="stageB" id="stageBFilter"><option value="ALL">全部状态</option></select></label>
+            <label><span>风险终审</span><select data-filter-key="stageC" id="stageCFilter"><option value="ALL">全部状态</option></select></label>
           </div>
         </div>
-        <article class="panel candidates-panel full"><div class="table-wrap"><table><thead><tr><th>公司 / 代码</th><th>Stage A</th><th>数据状态</th><th><button class="sort-header" data-sort="pe_ttm">PE (TTM)<span class="sort-icon">↕</span></button></th><th><button class="sort-header" data-sort="dividend_yield">股息率<span class="sort-icon">↕</span></button></th><th>Stage B</th><th>Stage C</th><th></th></tr></thead><tbody id="allCandidates"></tbody></table></div><div class="empty-state hidden" id="candidateEmpty"><h3>没有符合当前条件的记录</h3><p>尝试调整列筛选条件，或一键重置全部筛选。</p></div></article>
+        <article class="panel candidates-panel full"><div class="table-wrap"><table><thead><tr><th>公司 / 代码</th><th>量化初筛</th><th>数据状态</th><th><button class="sort-header" data-sort="pe_ttm">PE (TTM)<span class="sort-icon">↕</span></button></th><th><button class="sort-header" data-sort="dividend_yield">股息率<span class="sort-icon">↕</span></button></th><th>证据研究</th><th>风险终审</th><th></th></tr></thead><tbody id="allCandidates"></tbody></table></div><div class="empty-state hidden" id="candidateEmpty"><h3>没有符合当前条件的记录</h3><p>尝试调整列筛选条件，或一键重置全部筛选。</p></div></article>
       </section>
 
       <section class="page strategy-page" data-strategy-page="golden-pit" id="page-quality">
         <div class="page-heading compact"><div><span class="overline">DATA GOVERNANCE</span><h1>数据质量</h1><p>来源能力、字段覆盖和阻断性问题独立于业务结论展示。</p></div><div class="quality-gate" id="qualityGate"><span class="health-dot"></span><div><span>质量闸门</span><strong>—</strong></div></div></div>
         <div class="quality-summary" id="qualitySummary"></div>
-        <article class="panel"><div class="panel-header"><div><span class="panel-kicker">SOURCE ASSESSMENT</span><h2>来源评估记录</h2></div></div><div class="quality-list" id="qualityList"></div><div class="empty-state hidden" id="qualityEmpty"><h3>暂无质量评估记录</h3><p>运行 Stage A 后会自动生成来源能力和质量检查。</p></div></article>
+        <article class="panel"><div class="panel-header"><div><span class="panel-kicker">SOURCE ASSESSMENT</span><h2>来源评估记录</h2></div></div><div class="quality-list" id="qualityList"></div><div class="empty-state hidden" id="qualityEmpty"><h3>暂无质量评估记录</h3><p>运行量化初筛后会自动生成来源能力和质量检查。</p></div></article>
       </section>
 
       <section class="page strategy-page" data-strategy-page="golden-pit" id="page-runs">
@@ -157,7 +157,7 @@
   </aside>
 
   <dialog class="modal" id="workflowModal">
-    <form id="workflowForm"><div class="modal-header"><div><span class="overline">NEW SCREENING RUN</span><h2>启动点时筛选</h2><p>创建正式 Stage A 运行，完成后自动出现在控制台。</p></div><button type="button" class="icon-button modal-close"><svg viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg></button></div>
+    <form id="workflowForm"><div class="modal-header"><div><span class="overline">NEW SCREENING RUN</span><h2>启动点时筛选</h2><p>创建正式量化初筛运行，完成后自动出现在控制台。</p></div><button type="button" class="icon-button modal-close"><svg viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg></button></div>
       <fieldset class="scope-fieldset"><legend>筛选范围</legend><div class="scope-selector">
         <label class="scope-option"><input type="radio" name="scope" value="market" checked><span class="scope-radio"></span><span class="scope-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 0 1 0 18M12 3a15 15 0 0 0 0 18"/></svg></span><span class="scope-copy"><strong>一键全市场</strong><small>扫描数据源提供的完整 A 股股票池</small></span><span class="recommend-tag">推荐</span></label>
         <label class="scope-option"><input type="radio" name="scope" value="symbols"><span class="scope-radio"></span><span class="scope-icon"><svg viewBox="0 0 24 24"><path d="M4 19V9M10 19V5M16 19v-7M22 19H2"/></svg></span><span class="scope-copy"><strong>指定股票</strong><small>适合快速验证或小范围定向研究</small></span></label>

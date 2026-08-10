@@ -1,4 +1,4 @@
-"""Stage A/B/C golden-pit selection strategy."""
+"""Quantitative screening, evidence research and risk review strategy."""
 
 from .module import GoldenPitStrategy
 
