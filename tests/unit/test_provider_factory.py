@@ -8,7 +8,7 @@ from tests.unit.test_tushare_point_in_time import FakeTushare
 
 def test_factory_enables_three_sources_when_tushare_is_configured():
     provider = build_point_in_time_provider(
-        environment={"TIER1_DATA_SOURCES": "akshare,tushare,baostock"},
+        environment={"GOLDEN_PIT_DATA_SOURCES": "akshare,tushare,baostock"},
         today=date(2026, 8, 10),
         ak_module=FakeAK(),
         tushare_client=FakeTushare(),

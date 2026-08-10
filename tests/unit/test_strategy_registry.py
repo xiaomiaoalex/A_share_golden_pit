@@ -57,7 +57,8 @@ def test_default_registry_exposes_golden_pit_as_one_strategy(tmp_path):
     catalog = build_strategy_registry(tmp_path / "strategies.db").catalog()
 
     assert [item["id"] for item in catalog] == ["golden-pit"]
-    assert catalog[0]["ui_module"] == "/strategies/golden-pit.js"
+    assert catalog[0]["ui_module"] == "/strategy-assets/golden-pit/app.js"
+    assert catalog[0]["ui_template"] == "/strategy-assets/golden-pit/template.html"
     assert catalog[0]["metrics"][0] == {
         "key": "universe",
         "label": "覆盖股票",
@@ -80,7 +81,8 @@ def test_generic_http_layer_dispatches_registered_strategy(tmp_path):
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        with urlopen(f"http://127.0.0.1:{server.server_port}/api/strategies") as response:
+        catalog_url = f"http://127.0.0.1:{server.server_port}/api/strategies"
+        with urlopen(catalog_url) as response:
             catalog = json.loads(response.read())
         with urlopen(
             f"http://127.0.0.1:{server.server_port}/api/strategies/example/overview?run_id=run-1"
@@ -99,6 +101,34 @@ def test_generic_http_layer_dispatches_registered_strategy(tmp_path):
         assert overview["run_id"] == "run-1"
         assert operation["job"]["job_id"] == "example-job"
         assert jobs.command == ["example-command", "payload"]
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_strategy_frontend_asset_is_served_from_strategy_module(tmp_path):
+    server = ThreadingHTTPServer(
+        ("127.0.0.1", 0), build_handler(tmp_path / "assets.db")
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with urlopen(
+            f"http://127.0.0.1:{server.server_port}/strategy-assets/golden-pit/app.js"
+        ) as response:
+            content = response.read().decode("utf-8")
+        with urlopen(
+            f"http://127.0.0.1:{server.server_port}/strategy-assets/golden-pit/template.html"
+        ) as response:
+            template = response.read().decode("utf-8")
+        with urlopen(f"http://127.0.0.1:{server.server_port}/") as response:
+            shell = response.read().decode("utf-8")
+
+        assert response.status == HTTPStatus.OK
+        assert "StrategyConsole.register" in content
+        assert 'data-strategy-page="golden-pit"' in template
+        assert 'data-strategy-page="golden-pit"' not in shell
+        assert 'id="strategyWorkspace"' in shell
     finally:
         server.shutdown()
         server.server_close()

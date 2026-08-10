@@ -8,10 +8,11 @@ from http import HTTPStatus
 from pathlib import Path
 from typing import Any
 
-from config.tier1 import Tier1Config
-from src.storage.tier2_repository import Tier2Repository
-from src.storage.tier3_repository import Tier3Repository
 from src.strategies.contracts import StrategyDescriptor, StrategyOperation
+from src.strategies.golden_pit.config import Tier1Config
+from src.strategies.golden_pit.persistence.tier1_repository import Tier1Repository
+from src.strategies.golden_pit.persistence.tier2_repository import Tier2Repository
+from src.strategies.golden_pit.persistence.tier3_repository import Tier3Repository
 
 from .presentation import GoldenPitReadModel
 
@@ -21,13 +22,16 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 class GoldenPitStrategy:
     """Composition boundary for the adjustable three-phase strategy."""
 
+    asset_root = Path(__file__).resolve().parent / "presentation" / "static"
+
     descriptor = StrategyDescriptor(
         strategy_id="golden-pit",
         name="黄金坑三阶段策略",
         short_name="黄金坑",
         description="低估值、高分红与趋势改善初筛，叠加证据研究和行业化风险终审。",
         version=Tier1Config().calculation_version,
-        ui_module="/strategies/golden-pit.js",
+        ui_module="/strategy-assets/golden-pit/app.js",
+        ui_template="/strategy-assets/golden-pit/template.html",
         stages=("量化初筛", "证据研究", "风险终审"),
         capabilities=("全市场筛选", "断点续跑", "数据缺口补跑", "人工复核"),
         accent="emerald",
@@ -35,6 +39,7 @@ class GoldenPitStrategy:
 
     def __init__(self, db_path: str | Path):
         self.db_path = str(db_path)
+        Tier1Repository(db_path).migrate_all()
         self.read_model = GoldenPitReadModel(db_path)
 
     def catalog_entry(self) -> dict[str, Any]:
@@ -56,9 +61,21 @@ class GoldenPitStrategy:
             ),
             "metrics": [
                 {"key": "universe", "label": "覆盖股票", "value": summary["universe"]},
-                {"key": "stage_a", "label": "初筛通过", "value": summary["stage_a_pass"]},
-                {"key": "stage_b", "label": "研究通过", "value": summary["stage_b_pass"]},
-                {"key": "stage_c", "label": "最终候选", "value": summary["stage_c_pass"]},
+                {
+                    "key": "stage_a",
+                    "label": "初筛通过",
+                    "value": summary["stage_a_pass"],
+                },
+                {
+                    "key": "stage_b",
+                    "label": "研究通过",
+                    "value": summary["stage_b_pass"],
+                },
+                {
+                    "key": "stage_c",
+                    "label": "最终候选",
+                    "value": summary["stage_c_pass"],
+                },
             ],
         }
 
@@ -106,6 +123,8 @@ class GoldenPitStrategy:
         command = [
             sys.executable,
             str(PROJECT_ROOT / "main.py"),
+            "strategy",
+            "golden-pit",
             "workflow",
             "--as-of",
             as_of,
@@ -131,6 +150,8 @@ class GoldenPitStrategy:
         command = [
             sys.executable,
             str(PROJECT_ROOT / "main.py"),
+            "strategy",
+            "golden-pit",
             "export-tier2",
             "--run-id",
             run_id,
@@ -154,6 +175,8 @@ class GoldenPitStrategy:
         command = [
             sys.executable,
             str(PROJECT_ROOT / "main.py"),
+            "strategy",
+            "golden-pit",
             "retry-tier1-data" if data_retry else "resume-tier1",
             "--run-id",
             run_id,

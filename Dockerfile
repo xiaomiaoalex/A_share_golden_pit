@@ -1,8 +1,8 @@
-# A股黄金坑股票数据库 Docker镜像
+# A股多策略选股研究平台 Docker image
 FROM python:3.11-slim
 
-LABEL maintainer="Golden Pit Database"
-LABEL description="A股黄金坑股票数据库 - 价值投资筛选系统"
+LABEL maintainer="Strategy Research Platform"
+LABEL description="A股多策略选股研究平台"
 
 # 设置工作目录
 WORKDIR /app
@@ -36,7 +36,7 @@ COPY . .
 RUN mkdir -p data/db output logs
 
 # 初始化数据库
-RUN python main.py tier3-migrate
+RUN python main.py strategy golden-pit tier3-migrate
 
 # 默认命令
 CMD ["python", "main.py", "--help"]

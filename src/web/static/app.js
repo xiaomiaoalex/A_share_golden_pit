@@ -1,6 +1,7 @@
 const StrategyConsole = (() => {
   const modules = new Map();
   const loadedScripts = new Set();
+  const loadedTemplates = new Set();
   let ready = false;
   let activeStrategy = null;
   let catalog = [];
@@ -31,10 +32,28 @@ const StrategyConsole = (() => {
     $('#strategyCount').textContent = catalog.length;
     $('#strategyNavCount').textContent = catalog.length;
     renderCatalog();
-    await Promise.all(catalog.map(loadUiModule));
   }
 
-  function loadUiModule(strategy) {
+  async function loadUiTemplate(strategy) {
+    if (!strategy.ui_template || loadedTemplates.has(strategy.id)) return;
+    const response = await fetch(strategy.ui_template);
+    if (!response.ok) throw new Error(`无法载入策略页面模板: ${strategy.ui_template}`);
+    const source = await response.text();
+    const documentTemplate = new DOMParser().parseFromString(source, 'text/html');
+    const navigation = documentTemplate.querySelector(`[data-strategy-nav="${strategy.id}"]`);
+    const pages = [...documentTemplate.querySelectorAll(`[data-strategy-page="${strategy.id}"]`)];
+    if (!navigation || !pages.length) throw new Error(`策略 ${strategy.short_name} 的页面模板不完整`);
+    $('#strategyNavigation').append(navigation);
+    pages.forEach(page => $('#strategyWorkspace').append(page));
+    ['detailDrawer', 'workflowModal', 'reviewModal'].forEach(id => {
+      const overlay = documentTemplate.getElementById(id);
+      if (overlay) $('#strategyOverlays').append(overlay);
+    });
+    loadedTemplates.add(strategy.id);
+  }
+
+  async function loadUiModule(strategy) {
+    await loadUiTemplate(strategy);
     if (modules.has(strategy.id) || !strategy.ui_module || loadedScripts.has(strategy.ui_module)) return Promise.resolve();
     loadedScripts.add(strategy.ui_module);
     return new Promise((resolve, reject) => {
@@ -95,7 +114,6 @@ const StrategyConsole = (() => {
 
   async function init() {
     ready = true;
-    modules.forEach(mount);
     $('#menuButton').addEventListener('click', () => { $('#sidebar').classList.add('open'); $('#scrim').classList.add('open'); });
     $('#scrim').addEventListener('click', closeSidebar);
     document.addEventListener('click', async event => {

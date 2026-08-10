@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from http import HTTPStatus
+from pathlib import Path
 from typing import Any, Literal, Protocol
 
 
@@ -17,6 +18,7 @@ class StrategyDescriptor:
     description: str
     version: str
     ui_module: str
+    ui_template: str = ""
     status: Literal["ACTIVE", "BETA", "PAUSED"] = "ACTIVE"
     stages: tuple[str, ...] = ()
     capabilities: tuple[str, ...] = ()
@@ -43,6 +45,7 @@ class StrategyModule(Protocol):
     """The only interface the Web application knows about a strategy."""
 
     descriptor: StrategyDescriptor
+    asset_root: Path
 
     def catalog_entry(self) -> dict[str, Any]: ...
 

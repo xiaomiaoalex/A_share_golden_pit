@@ -1,31 +1,3 @@
-"""Strict, point-in-time Tier1 screening pipeline."""
+"""Deprecated compatibility namespace for Golden Pit quantitative screening."""
 
-from .contracts import (
-    BusinessStatus,
-    CorporateAction,
-    DataStatus,
-    DividendEvent,
-    FinancialReportFact,
-    MarketSnapshot,
-    QuarterlyMetric,
-    RiskWarningStatus,
-    Tier1Decision,
-)
-from .decision import DecisionInput, evaluate_tier1
-from .quarterly import build_quarterly_series, recent_quarter_window
-
-__all__ = [
-    "BusinessStatus",
-    "CorporateAction",
-    "DataStatus",
-    "DecisionInput",
-    "DividendEvent",
-    "FinancialReportFact",
-    "MarketSnapshot",
-    "QuarterlyMetric",
-    "RiskWarningStatus",
-    "Tier1Decision",
-    "build_quarterly_series",
-    "evaluate_tier1",
-    "recent_quarter_window",
-]
+from src.strategies.golden_pit.quantitative_screening import *  # noqa: F401,F403

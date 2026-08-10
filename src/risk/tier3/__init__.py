@@ -1,23 +1,3 @@
-"""Stage C industry-aware financial-risk and value-trap filter."""
+"""Deprecated compatibility namespace for Golden Pit risk review."""
 
-from .engine import RiskAssessmentEngine
-from .importer import Tier3RiskImporter
-from .models import (
-    BankRiskModel,
-    IndustrialRiskModel,
-    InsuranceRiskModel,
-    RealEstateRiskModel,
-    RiskModelRegistry,
-)
-from .template import Tier3TemplateExporter
-
-__all__ = [
-    "BankRiskModel",
-    "IndustrialRiskModel",
-    "InsuranceRiskModel",
-    "RealEstateRiskModel",
-    "RiskAssessmentEngine",
-    "RiskModelRegistry",
-    "Tier3RiskImporter",
-    "Tier3TemplateExporter",
-]
+from src.strategies.golden_pit.risk_review import *  # noqa: F401,F403
