@@ -6,7 +6,7 @@ SQLAlchemy ORM 模型定义 - A股黄金坑股票数据库持久化存储层。
 """
 
 import datetime
-from typing import Any, Optional
+from typing import Optional
 
 from sqlalchemy import (
     Boolean,
@@ -14,7 +14,6 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
-    Index,
     Integer,
     JSON,
     String,

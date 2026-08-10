@@ -445,6 +445,9 @@ def build_parser() -> argparse.ArgumentParser:
   python main.py screen-tier1 --as-of 2026-08-10 --symbols 000651 600519
   python main.py verify-tier1-sources --as-of 2026-08-10 --symbols 000651
   python main.py show-tier1 --run-id RUN_ID
+  python main.py export-tier2 --run-id RUN_ID
+  python main.py import-tier2 --file ai_results.json
+  python main.py review-tier2 --run-id RUN_ID
   python main.py scan                  # 全量三层扫描
   python main.py scan --quick          # 快速扫描（仅Tier1）
   python main.py stock 000002          # 分析万科A
@@ -491,6 +494,38 @@ def build_parser() -> argparse.ArgumentParser:
     )
     migrate_tier1_parser.add_argument('--rollback', action='store_true', help='仅删除Stage A新增表')
     migrate_tier1_parser.add_argument('--db', default=str(settings.DB_PATH), help='SQLite数据库路径')
+
+    export_tier2_parser = subparsers.add_parser(
+        'export-tier2', help='为Tier1 PASS候选生成逐股Tier2证据包'
+    )
+    export_tier2_parser.add_argument('--run-id', required=True, help='已完成的Tier1运行ID')
+    export_tier2_parser.add_argument('--symbols', nargs='+', help='可选：仅导出指定PASS股票')
+    export_tier2_parser.add_argument('--output-dir', help='输出目录，默认output/tier2/RUN_ID')
+    export_tier2_parser.add_argument('--db', default=str(settings.DB_PATH), help='SQLite数据库路径')
+
+    import_tier2_parser = subparsers.add_parser(
+        'import-tier2', help='校验并原子导入Tier2 AI JSON结果'
+    )
+    import_tier2_parser.add_argument('--file', required=True, help='AI JSON结果文件')
+    import_tier2_parser.add_argument('--db', default=str(settings.DB_PATH), help='SQLite数据库路径')
+
+    review_tier2_parser = subparsers.add_parser(
+        'review-tier2', help='查看Tier2状态或记录人工最终复核'
+    )
+    review_tier2_parser.add_argument('--run-id', required=True, help='Tier1运行ID')
+    review_tier2_parser.add_argument('--symbol', help='要复核的股票代码')
+    review_tier2_parser.add_argument('--assessment-id', help='可选AI评估ID；默认取该股票最新评估')
+    review_tier2_parser.add_argument('--decision', choices=['PASS', 'REVIEW', 'REJECT'])
+    review_tier2_parser.add_argument('--reviewer', help='人工复核人')
+    review_tier2_parser.add_argument('--rationale', help='人工复核理由，不得为空')
+    review_tier2_parser.add_argument('--output', help='可选Markdown复核报告路径')
+    review_tier2_parser.add_argument('--db', default=str(settings.DB_PATH), help='SQLite数据库路径')
+
+    migrate_tier2_parser = subparsers.add_parser(
+        'tier2-migrate', help='应用当前迁移或仅回滚Stage B新增表'
+    )
+    migrate_tier2_parser.add_argument('--rollback', action='store_true', help='仅删除Stage B新增表')
+    migrate_tier2_parser.add_argument('--db', default=str(settings.DB_PATH), help='SQLite数据库路径')
 
     # scan 命令
     scan_parser = subparsers.add_parser('scan', help='执行全量扫描')
@@ -693,6 +728,139 @@ def _migrate_tier1_command(args) -> None:
         print(f"已应用Stage A迁移: {args.db}")
 
 
+def _export_tier2_command(args) -> None:
+    from src.screening.tier2_human_ai import Tier2EvidenceExporter
+    from src.storage.tier2_repository import Tier2Repository
+
+    symbols = [_normalize_symbol(value) for value in args.symbols] if args.symbols else None
+    output_dir = Path(args.output_dir) if args.output_dir else settings.OUTPUT_DIR / 'tier2' / args.run_id
+    result = Tier2EvidenceExporter(Tier2Repository(args.db)).export_run(
+        args.run_id, output_dir, symbols=symbols
+    )
+    print(f"Tier2证据包数量: {result['package_count']}")
+    print(f"索引: {result['index_path']}")
+    partial = sum(1 for item in result['packages'] if item['coverage_status'] == 'PARTIAL')
+    print(f"证据不完整（必须审慎REVIEW）: {partial}")
+
+
+def _import_tier2_command(args) -> None:
+    from src.screening.tier2_human_ai import Tier2AssessmentImporter
+    from src.storage.tier2_repository import Tier2Repository
+
+    schema_path = settings.PROJECT_ROOT / 'config' / 'tier2_ai_schema.json'
+    result = Tier2AssessmentImporter(
+        Tier2Repository(args.db), schema_path
+    ).import_file(args.file)
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+
+
+def _review_tier2_command(args) -> None:
+    from src.storage.tier2_repository import Tier2Repository
+
+    repository = Tier2Repository(args.db)
+    action_fields = [args.symbol, args.assessment_id, args.decision, args.reviewer, args.rationale]
+    if any(value is not None for value in action_fields):
+        if not args.decision or not args.reviewer or not args.rationale:
+            raise ValueError("记录人工复核必须提供--decision、--reviewer和--rationale")
+        assessment_id = args.assessment_id
+        if assessment_id is None:
+            if not args.symbol:
+                raise ValueError("未提供--assessment-id时必须提供--symbol")
+            latest = repository.latest_assessment(args.run_id, _normalize_symbol(args.symbol))
+            if latest is None:
+                raise ValueError("该股票尚无可复核的AI评估")
+            assessment_id = latest['assessment_id']
+        review_id = repository.save_human_review(
+            assessment_id=assessment_id,
+            decision=args.decision,
+            reviewer=args.reviewer.strip(),
+            rationale=args.rationale.strip(),
+            expected_run_id=args.run_id,
+            expected_symbol=_normalize_symbol(args.symbol) if args.symbol else None,
+        )
+        print(f"review_id: {review_id}")
+
+    rows = repository.review_summary(args.run_id)
+    if not rows:
+        print("该运行尚未生成Tier2证据包")
+        return
+    display_columns = [
+        'symbol', 'stock_name', 'coverage_status', 'ai_recommendation',
+        'system_recommendation', 'human_decision', 'reviewer',
+    ]
+    print(pd.DataFrame(rows)[display_columns].to_string(index=False))
+    if args.output:
+        lines = [
+            f"# Tier2人机协作复核报告 — {args.run_id}",
+            "",
+            "| 股票 | 公司 | 证据覆盖 | AI建议 | 系统结论 | 人工决定 | 复核人 |",
+            "|---|---|---|---|---|---|---|",
+        ]
+        for row in rows:
+            lines.append(
+                f"| {row['symbol']} | {row['stock_name']} | {row['coverage_status']} | "
+                f"{row.get('ai_recommendation') or '-'} | "
+                f"{row.get('system_recommendation') or '-'} | "
+                f"{row.get('human_decision') or '-'} | {row.get('reviewer') or '-'} |"
+            )
+        for row in rows:
+            lines.extend(
+                [
+                    "",
+                    f"## {row['symbol']} {row['stock_name']}",
+                    "",
+                    f"- 证据覆盖：{row['coverage_status']}",
+                    f"- 系统结论：{row.get('system_recommendation') or '尚未导入AI结果'}",
+                    f"- 人工决定：{row.get('human_decision') or '尚未复核'}",
+                    f"- 缺失区块：{row.get('missing_sections_json') or '[]'}",
+                    "",
+                ]
+            )
+            if row.get('assessment_json'):
+                assessment = json.loads(row['assessment_json'])
+                lines.extend(
+                    [
+                        "| 维度 | 结论 | 置信度 | 推理摘要 |",
+                        "|---|---|---:|---|",
+                    ]
+                )
+                for dimension in assessment['dimensions']:
+                    reasoning = str(dimension['reasoning_summary']).replace('|', '\\|')
+                    lines.append(
+                        f"| {dimension['dimension']} | {dimension['verdict']} | "
+                        f"{dimension['confidence']:.2f} | {reasoning} |"
+                    )
+                lines.extend(
+                    [
+                        "",
+                        "反方证据：",
+                        "",
+                        *[f"- {item}" for item in assessment['overall_counter_evidence']],
+                        "",
+                        "证伪条件：",
+                        "",
+                        *[f"- {item}" for item in assessment['falsification_conditions']],
+                        "",
+                    ]
+                )
+        output = Path(args.output).resolve()
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text("\n".join(lines) + "\n", encoding='utf-8')
+        print(f"复核报告: {output}")
+
+
+def _migrate_tier2_command(args) -> None:
+    from src.storage.tier2_repository import Tier2Repository
+
+    repository = Tier2Repository(args.db)
+    if args.rollback:
+        repository.rollback_stage_b()
+        print(f"已回滚Stage B新增表: {args.db}")
+    else:
+        repository.migrate()
+        print(f"已应用当前数据库迁移（含Stage B）: {args.db}")
+
+
 def main():
     """主入口函数"""
     setup_logging()
@@ -716,7 +884,19 @@ def main():
         if args.command == 'tier1-migrate':
             _migrate_tier1_command(args)
             return
-    except (ValueError, OSError) as exc:
+        if args.command == 'export-tier2':
+            _export_tier2_command(args)
+            return
+        if args.command == 'import-tier2':
+            _import_tier2_command(args)
+            return
+        if args.command == 'review-tier2':
+            _review_tier2_command(args)
+            return
+        if args.command == 'tier2-migrate':
+            _migrate_tier2_command(args)
+            return
+    except (TypeError, ValueError, OSError) as exc:
         parser.error(str(exc))
 
     _load_legacy_components()

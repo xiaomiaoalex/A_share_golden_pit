@@ -35,6 +35,14 @@ MIGRATIONS = (
 )
 MIGRATION_VERSION = MIGRATIONS[-1][0]
 
+STAGE_B_MIGRATIONS = (
+    (
+        "003_tier2_human_ai",
+        "003_tier2_human_ai_up.sql",
+        "Stage B Tier2 human-AI evidence workflow",
+    ),
+)
+
 
 def _json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
@@ -62,8 +70,14 @@ class Tier1Repository:
         return connection
 
     def migrate(self) -> None:
+        self._apply_migrations(MIGRATIONS)
+
+    def migrate_all(self) -> None:
+        self._apply_migrations(MIGRATIONS + STAGE_B_MIGRATIONS)
+
+    def _apply_migrations(self, migrations) -> None:
         with self.connect() as connection:
-            for version, filename, description in MIGRATIONS:
+            for version, filename, description in migrations:
                 applied = False
                 if self._table_exists(connection, "schema_migrations"):
                     applied = (
@@ -87,6 +101,9 @@ class Tier1Repository:
                 )
 
     def rollback_stage_a(self) -> None:
+        tier2_down = (
+            self.project_root / "scripts" / "migrations" / "003_tier2_human_ai_down.sql"
+        )
         quality_down = (
             self.project_root
             / "scripts"
@@ -97,12 +114,17 @@ class Tier1Repository:
             self.project_root / "scripts" / "migrations" / "001_tier1_v2_down.sql"
         )
         with self.connect() as connection:
+            connection.executescript(tier2_down.read_text(encoding="utf-8"))
             connection.executescript(quality_down.read_text(encoding="utf-8"))
             connection.executescript(down_path.read_text(encoding="utf-8"))
             if self._table_exists(connection, "schema_migrations"):
                 connection.executemany(
                     "DELETE FROM schema_migrations WHERE version = ?",
                     [(version,) for version, _, _ in MIGRATIONS],
+                )
+                connection.execute(
+                    "DELETE FROM schema_migrations WHERE version = ?",
+                    ("003_tier2_human_ai",),
                 )
 
     @staticmethod

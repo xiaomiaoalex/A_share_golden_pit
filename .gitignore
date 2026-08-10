@@ -28,8 +28,10 @@ logs/*.log
 # 输出文件
 output/reports/*
 output/dashboards/*
+output/tier2/*
 !output/reports/.gitkeep
 !output/dashboards/.gitkeep
+!output/tier2/.gitkeep
 
 # IDE
 .idea/

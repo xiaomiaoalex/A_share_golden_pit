@@ -1,0 +1,102 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://golden-pit.local/schema/tier2-ai-v1.0.json",
+  "title": "A股黄金坑 Tier2 AI assessment",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "run_id", "symbol", "as_of_date",
+    "evidence_package_id", "evidence_content_hash", "ai_provider",
+    "recommendation", "dimensions", "scenario_analysis",
+    "overall_reasoning", "overall_counter_evidence",
+    "falsification_conditions"
+  ],
+  "properties": {
+    "schema_version": {"const": "tier2-ai-v1.0"},
+    "run_id": {"type": "string", "minLength": 1},
+    "symbol": {"type": "string", "pattern": "^[0-9]{6}$"},
+    "as_of_date": {"type": "string", "format": "date"},
+    "evidence_package_id": {"type": "string", "minLength": 1},
+    "evidence_content_hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "ai_provider": {"type": "string", "minLength": 1},
+    "ai_model": {"type": ["string", "null"]},
+    "recommendation": {"enum": ["PASS", "REVIEW", "REJECT"]},
+    "dimensions": {
+      "type": "array",
+      "minItems": 7,
+      "maxItems": 7,
+      "items": {"$ref": "#/$defs/dimension"}
+    },
+    "scenario_analysis": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "items": {"$ref": "#/$defs/scenario"}
+    },
+    "overall_reasoning": {"type": "string", "minLength": 1},
+    "overall_counter_evidence": {
+      "type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}
+    },
+    "falsification_conditions": {
+      "type": "array", "minItems": 3, "items": {"type": "string", "minLength": 1}
+    }
+  },
+  "$defs": {
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["title", "publisher", "date", "url_or_document", "page_or_section"],
+      "properties": {
+        "title": {"type": "string", "minLength": 1},
+        "publisher": {"type": "string", "minLength": 1},
+        "date": {"type": "string", "format": "date"},
+        "url_or_document": {"type": "string", "minLength": 1},
+        "page_or_section": {"type": "string", "minLength": 1}
+      }
+    },
+    "dimension": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "dimension", "verdict", "confidence", "facts", "inferences",
+        "counter_evidence", "sources", "reasoning_summary",
+        "falsification_conditions"
+      ],
+      "properties": {
+        "dimension": {
+          "enum": [
+            "demand_durability", "competitive_position",
+            "dividend_sustainability", "earnings_quality",
+            "market_mispricing", "risk_reward_asymmetry", "long_cycle_fit"
+          ]
+        },
+        "verdict": {"enum": ["PASS", "WARN", "FAIL", "INSUFFICIENT_EVIDENCE"]},
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        "facts": {"type": "array", "items": {"type": "string", "minLength": 1}},
+        "inferences": {"type": "array", "items": {"type": "string", "minLength": 1}},
+        "counter_evidence": {"type": "array", "items": {"type": "string", "minLength": 1}},
+        "sources": {"type": "array", "items": {"$ref": "#/$defs/source"}},
+        "reasoning_summary": {"type": "string", "minLength": 1},
+        "falsification_conditions": {
+          "type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "scenario": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scenario", "assumptions", "value_per_share",
+        "annualized_return_3y", "annualized_return_5y", "permanent_loss_risk"
+      ],
+      "properties": {
+        "scenario": {"enum": ["PESSIMISTIC", "BASE", "OPTIMISTIC"]},
+        "assumptions": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+        "value_per_share": {"type": ["number", "null"], "minimum": 0},
+        "annualized_return_3y": {"type": ["number", "null"], "minimum": -1, "maximum": 10},
+        "annualized_return_5y": {"type": ["number", "null"], "minimum": -1, "maximum": 10},
+        "permanent_loss_risk": {"enum": ["LOW", "MEDIUM", "HIGH", "UNKNOWN"]}
+      }
+    }
+  }
+}
