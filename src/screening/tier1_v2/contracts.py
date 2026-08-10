@@ -133,7 +133,7 @@ class Tier1Decision:
     not_comparable_reasons: list[str] = field(default_factory=list)
     quality_warnings: list[str] = field(default_factory=list)
     secondary_queues: list[str] = field(default_factory=list)
-    calculation_version: str = "tier1-v2.0.0"
+    calculation_version: str = "tier1-v2.1.0"
     created_at: datetime = field(default_factory=datetime.now)
 
     def to_dict(self) -> dict[str, Any]:

@@ -15,6 +15,7 @@ from typing import Any, Iterable, Optional
 
 from config.tier1 import Tier1Config
 from src.data.point_in_time.contracts import DataEnvelope, DividendBundle
+from src.data.quality.types import QualityAssessment
 from src.screening.tier1_v2.contracts import (
     FinancialReportFact,
     QuarterlyMetric,
@@ -24,7 +25,15 @@ from src.screening.tier1_v2.contracts import (
 from src.screening.tier1_v2.metrics import DividendCalculation
 
 
-MIGRATION_VERSION = "001_tier1_v2"
+MIGRATIONS = (
+    ("001_tier1_v2", "001_tier1_v2_up.sql", "Stage A strict Tier1 v2"),
+    (
+        "002_tier1_data_quality",
+        "002_tier1_data_quality_up.sql",
+        "Tier1 business data quality assessments",
+    ),
+)
+MIGRATION_VERSION = MIGRATIONS[-1][0]
 
 
 def _json(value: Any) -> str:
@@ -53,26 +62,47 @@ class Tier1Repository:
         return connection
 
     def migrate(self) -> None:
-        up_path = self.project_root / "scripts" / "migrations" / "001_tier1_v2_up.sql"
-        script = up_path.read_text(encoding="utf-8")
         with self.connect() as connection:
-            connection.executescript(script)
-            connection.execute(
-                """
-                INSERT OR IGNORE INTO schema_migrations(version, applied_at, description)
-                VALUES (?, ?, ?)
-                """,
-                (MIGRATION_VERSION, datetime.now().isoformat(), "Stage A strict Tier1 v2"),
-            )
+            for version, filename, description in MIGRATIONS:
+                applied = False
+                if self._table_exists(connection, "schema_migrations"):
+                    applied = (
+                        connection.execute(
+                            "SELECT 1 FROM schema_migrations WHERE version=?",
+                            (version,),
+                        ).fetchone()
+                        is not None
+                    )
+                if applied:
+                    continue
+                up_path = self.project_root / "scripts" / "migrations" / filename
+                connection.executescript(up_path.read_text(encoding="utf-8"))
+                connection.execute(
+                    """
+                    INSERT OR IGNORE INTO schema_migrations(
+                        version, applied_at, description
+                    ) VALUES (?, ?, ?)
+                    """,
+                    (version, datetime.now().isoformat(), description),
+                )
 
     def rollback_stage_a(self) -> None:
-        down_path = self.project_root / "scripts" / "migrations" / "001_tier1_v2_down.sql"
-        script = down_path.read_text(encoding="utf-8")
+        quality_down = (
+            self.project_root
+            / "scripts"
+            / "migrations"
+            / "002_tier1_data_quality_down.sql"
+        )
+        down_path = (
+            self.project_root / "scripts" / "migrations" / "001_tier1_v2_down.sql"
+        )
         with self.connect() as connection:
-            connection.executescript(script)
+            connection.executescript(quality_down.read_text(encoding="utf-8"))
+            connection.executescript(down_path.read_text(encoding="utf-8"))
             if self._table_exists(connection, "schema_migrations"):
-                connection.execute(
-                    "DELETE FROM schema_migrations WHERE version = ?", (MIGRATION_VERSION,)
+                connection.executemany(
+                    "DELETE FROM schema_migrations WHERE version = ?",
+                    [(version,) for version, _, _ in MIGRATIONS],
                 )
 
     @staticmethod
@@ -113,12 +143,14 @@ class Tier1Repository:
         errors: Optional[list[str]] = None,
     ) -> None:
         dates = sorted(price_dates)
+        quality_summary = self.quality_summary(run_id)
         with self.connect() as connection:
             connection.execute(
                 """
                 UPDATE screening_runs
                 SET status=?, finished_at=?, universe_size=?, price_date_min=?,
-                    price_date_max=?, error_summary_json=?
+                    price_date_max=?, error_summary_json=?,
+                    data_quality_summary_json=?
                 WHERE run_id=?
                 """,
                 (
@@ -128,9 +160,129 @@ class Tier1Repository:
                     dates[0].isoformat() if dates else None,
                     dates[-1].isoformat() if dates else None,
                     _json(errors or []),
+                    _json(quality_summary),
                     run_id,
                 ),
             )
+
+    def save_quality_assessment(
+        self,
+        run_id: str,
+        symbol: Optional[str],
+        observation_id: int,
+        assessment: QualityAssessment,
+    ) -> int:
+        with self.connect() as connection:
+            cursor = connection.execute(
+                """
+                INSERT INTO data_quality_assessments(
+                    run_id, symbol, field_group, source_observation_id, provider,
+                    capability, verification_status, severity, blocking,
+                    issues_json, assessed_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    run_id,
+                    symbol,
+                    assessment.field_group,
+                    observation_id,
+                    assessment.provider,
+                    assessment.capability.value,
+                    assessment.verification_status.value,
+                    assessment.severity.value,
+                    int(assessment.blocking),
+                    _json(assessment.to_dict()["issues"]),
+                    datetime.now().isoformat(),
+                ),
+            )
+        return int(cursor.lastrowid)
+
+    def save_source_verification(
+        self, report: dict[str, Any], *, run_id: Optional[str] = None
+    ) -> str:
+        self.migrate()
+        verification_id = str(uuid.uuid4())
+        with self.connect() as connection:
+            if run_id is not None:
+                run = connection.execute(
+                    "SELECT as_of_date FROM screening_runs WHERE run_id=?", (run_id,)
+                ).fetchone()
+                if run is None:
+                    raise ValueError(f"未知Tier1 run_id: {run_id}")
+                if str(run["as_of_date"]) != str(report["as_of_date"]):
+                    raise ValueError("多源验证as-of与绑定的Tier1运行不一致")
+                decision = connection.execute(
+                    """
+                    SELECT 1 FROM tier1_decisions
+                    WHERE run_id=? AND symbol=?
+                    """,
+                    (run_id, report["symbol"]),
+                ).fetchone()
+                if decision is None:
+                    raise ValueError("多源验证股票不在绑定的Tier1运行中")
+            connection.execute(
+                """
+                INSERT INTO source_verification_reports(
+                    verification_id, run_id, symbol, as_of_date,
+                    overall_verdict, providers_json, responses_json,
+                    checks_json, note, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    verification_id,
+                    run_id,
+                    report["symbol"],
+                    report["as_of_date"],
+                    report["overall_verdict"],
+                    _json(report.get("providers", [])),
+                    _json(report.get("responses", [])),
+                    _json(report.get("checks", [])),
+                    report.get("note"),
+                    datetime.now().isoformat(),
+                ),
+            )
+        return verification_id
+
+    def quality_summary(self, run_id: str) -> dict[str, Any]:
+        with self.connect() as connection:
+            if not self._table_exists(connection, "data_quality_assessments"):
+                return {
+                    "assessment_count": 0,
+                    "blocking_assessments": 0,
+                    "quality_gate_passed": True,
+                    "verification_counts": {},
+                    "severity_counts": {},
+                }
+            rows = connection.execute(
+                """
+                SELECT verification_status, severity, blocking, COUNT(*) AS count
+                FROM data_quality_assessments
+                WHERE run_id=?
+                GROUP BY verification_status, severity, blocking
+                """,
+                (run_id,),
+            ).fetchall()
+        verification_counts: dict[str, int] = {}
+        severity_counts: dict[str, int] = {}
+        blocking = 0
+        total = 0
+        for row in rows:
+            count = int(row["count"])
+            total += count
+            blocking += count if int(row["blocking"]) else 0
+            verification = str(row["verification_status"])
+            severity = str(row["severity"])
+            verification_counts[verification] = (
+                verification_counts.get(verification, 0) + count
+            )
+            severity_counts[severity] = severity_counts.get(severity, 0) + count
+        return {
+            "assessment_count": total,
+            "blocking_assessments": blocking,
+            "quality_gate_passed": blocking == 0,
+            "verification_counts": verification_counts,
+            "severity_counts": severity_counts,
+        }
 
     def save_observation(
         self,
@@ -165,7 +317,9 @@ class Tier1Repository:
                     envelope.error_type,
                     envelope.error_message,
                     _json(envelope.quality_warnings),
-                    _json(envelope.raw_payload) if envelope.raw_payload is not None else None,
+                    _json(envelope.raw_payload)
+                    if envelope.raw_payload is not None
+                    else None,
                 ),
             )
             observation_id = int(cursor.lastrowid)
@@ -253,7 +407,9 @@ class Tier1Repository:
         }
         rows = []
         for event in bundle.events:
-            adjusted = adjusted_lookup.get((event.ex_date, event.raw_cash_per_share_pre_tax))
+            adjusted = adjusted_lookup.get(
+                (event.ex_date, event.raw_cash_per_share_pre_tax)
+            )
             rows.append(
                 (
                     run_id,
@@ -299,7 +455,9 @@ class Tier1Repository:
                     run_id,
                     status.symbol,
                     status.as_of_date.isoformat(),
-                    None if status.is_risk_warning is None else int(status.is_risk_warning),
+                    None
+                    if status.is_risk_warning is None
+                    else int(status.is_risk_warning),
                     status.security_name,
                     _iso(status.effective_date),
                     status.source,
@@ -341,7 +499,9 @@ class Tier1Repository:
                     decision.dividend_yield_ttm,
                     decision.dividend_ttm_raw_per_share,
                     decision.dividend_ttm_adjusted_per_share,
-                    None if decision.risk_warning is None else int(decision.risk_warning),
+                    None
+                    if decision.risk_warning is None
+                    else int(decision.risk_warning),
                     _json(decision.trend_quarters),
                     _json(decision.revenue_yoy_sequence),
                     _json(decision.parent_np_yoy_sequence),
@@ -411,6 +571,16 @@ class Tier1Repository:
             if not self._table_exists(connection, "tier1_decisions"):
                 return []
             rows = connection.execute(
-                "SELECT * FROM tier1_decisions WHERE run_id=? ORDER BY symbol", (run_id,)
+                "SELECT * FROM tier1_decisions WHERE run_id=? ORDER BY symbol",
+                (run_id,),
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def run_record(self, run_id: str) -> Optional[dict[str, Any]]:
+        with self.connect() as connection:
+            if not self._table_exists(connection, "screening_runs"):
+                return None
+            row = connection.execute(
+                "SELECT * FROM screening_runs WHERE run_id=?", (run_id,)
+            ).fetchone()
+        return dict(row) if row is not None else None

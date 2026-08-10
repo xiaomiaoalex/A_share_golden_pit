@@ -104,10 +104,22 @@ def test_pipeline_pass_persists_raw_series_lineage_and_decision(tmp_path):
     assert result["summary"] == {"PASS": 1}
     assert row["business_status"] == "PASS"
     assert row["data_status"] == "COMPLETE"
+    assert result["data_quality"]["quality_gate_passed"] is True
+    assert result["data_quality"]["verification_counts"] == {"SINGLE_SOURCE": 5}
     with repository.connect() as connection:
-        assert connection.execute("SELECT COUNT(*) FROM tier1_raw_metrics").fetchone()[0] > 0
-        assert connection.execute("SELECT COUNT(*) FROM tier1_quarterly_series").fetchone()[0] > 0
-        assert connection.execute("SELECT COUNT(*) FROM source_lineage").fetchone()[0] >= 4
+        assert (
+            connection.execute("SELECT COUNT(*) FROM tier1_raw_metrics").fetchone()[0]
+            > 0
+        )
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM tier1_quarterly_series"
+            ).fetchone()[0]
+            > 0
+        )
+        assert (
+            connection.execute("SELECT COUNT(*) FROM source_lineage").fetchone()[0] >= 4
+        )
 
 
 def test_known_pe_fail_short_circuits_but_keeps_partial_data_state(tmp_path):
@@ -128,3 +140,34 @@ def test_historical_run_uses_point_in_time_self_computed_pe(tmp_path):
     assert row["supplier_pe_ttm"] == 10.0
     assert row["self_pe_ttm"] == 12.0
     assert row["selected_pe_ttm"] == 12.0
+
+
+def test_quality_gate_blocks_future_market_data_and_preserves_run(tmp_path):
+    class FutureMarketProvider(SyntheticProvider):
+        def get_market_snapshot(self, symbol, as_of_date):
+            result = super().get_market_snapshot(symbol, as_of_date)
+            result.data = MarketSnapshot(
+                symbol=symbol,
+                price_date=date(2026, 8, 11),
+                close_price=10,
+                market_cap=522,
+                total_shares=52.2,
+                supplier_pe_ttm=12,
+                source="synthetic:future",
+            )
+            return result
+
+    result, row, repository = run_one(tmp_path, FutureMarketProvider())
+
+    assert row["business_status"] != "PASS"
+    assert result["data_quality"]["quality_gate_passed"] is False
+    assert result["data_quality"]["blocking_assessments"] == 1
+    with repository.connect() as connection:
+        observation = connection.execute(
+            "SELECT fetch_status FROM source_observations WHERE field_group='market'"
+        ).fetchone()
+        assessment = connection.execute(
+            "SELECT blocking FROM data_quality_assessments WHERE field_group='market'"
+        ).fetchone()
+    assert observation["fetch_status"] == "SUCCESS"
+    assert assessment["blocking"] == 1

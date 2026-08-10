@@ -6,6 +6,9 @@
 旧 `RadarScanner → DeepScreener → CoreConfirmer` 调用链保持不变；
 `screen-tier1` 不实例化旧应用，也不会触发Tier2或Tier3。
 
+当前计算契约版本为 `tier1-v2.1.0`；相较2.0新增业务数据质量闸门并收紧历史ST
+点时规则，历史运行仍保留各自原始版本号。
+
 ## 2. 硬筛选口径
 
 | 条件 | 正式口径 | 边界 |
@@ -33,6 +36,10 @@ Q4=年报累计-前三季累计` 还原单季度。同比使用同一自然季�
 
 数据状态：`COMPLETE / PARTIAL / ERROR`。
 
+验证状态独立保存为：`SINGLE_SOURCE / CROSS_VERIFIED / PRIMARY_VERIFIED /
+UNVERIFIED / CONFLICT`。当前自动筛选通常为 `SINGLE_SOURCE`；只有显式多源核验才
+产生跨源证据。验证等级暂不改变五项硬筛选阈值，避免因第二源短时不可用中断业务。
+
 对外筛选状态：
 
 - `PASS`：全部硬条件有数据且明确通过；
@@ -51,6 +58,8 @@ Q4=年报累计-前三季累计` 还原单季度。同比使用同一自然季�
 - 正式利润表只使用 `NOTICE_DATE <= as_of_date`，且修订更新时间也不得晚于
   `as_of_date`；供应商只保留未来修订版时宁可待补数据；
 - 分红只计入截至筛选日已实施且除权日已发生的方案；
+- AKShare当前ST列表只允许用于 `as_of_date=今天`；任何过去日期必须使用带生效日的
+  历史来源或保持待补，最近日期也不例外；
 - 每次运行、数据请求、Schema哈希、抓取时间、公告日、报告期、原始值、计算值和
   公式均单独保存；
 - 历史全市场CLI要求显式点时股票池；指定股票可用 `--symbols` 复算；
@@ -59,7 +68,24 @@ Q4=年报累计-前三季累计` 还原单季度。同比使用同一自然季�
 
 备用数据源链只补数据，不改变口径或阈值；返回值保留所有尝试的状态轨迹。
 
-### 4.1 生产多源链
+### 4.1 业务数据质量闸门
+
+机器可读指标注册表位于 `src/data/quality/registry.py`，明确营业收入、归母净利润、
+PE、税前分红和风险警示的定义、粒度、单位、可得时间、允许字段与禁止替代字段。
+
+每个取数结果在参与决策前接受质量评估。以下问题会阻止该字段形成业务通过结论：
+
+- 最终股票池为空、代码/交易所非法或证券代码重复；
+- 行情、公告、修订、除权、公司行动或风险状态来自as-of之后；
+- 同一报告期存在未消歧的多个财报版本，或报告期不是标准季度末；
+- 收盘价、总市值、总股本或送转因子存在不可能值；
+- 来源被注册为不支持该字段，却返回了可用数据。
+
+来源仅具有限定覆盖、当前只有单源或非正PE等情况只记录质量问题，不中断正常筛选。
+原始抓取状态与质量闸门结果分别保存，因而可以区分“接口成功但数据不可用”和
+“接口本身失败”。运行结果与 `show-tier1` 会输出质量摘要。
+
+### 4.2 生产多源链
 
 | 顺序 | 来源 | 可用于硬筛选的已验证字段 | 明确限制 |
 |---|---|---|---|
@@ -99,9 +125,15 @@ $env:TUSHARE_TOKEN = "在本机环境变量中设置，不写入仓库"
 python main.py verify-tier1-sources --as-of 2026-08-10 --symbols 000651
 ```
 
+核验报告默认写入 `source_verification_reports`；可用 `--run-id` 绑定某次筛选，或用
+`--no-persist` 仅输出JSON。核验是独立质量证据，不会自动覆盖供应商原始值。
+
 ## 5. 数据库迁移
 
-升级脚本：`scripts/migrations/001_tier1_v2_up.sql`。
+升级脚本按顺序执行：
+
+- `scripts/migrations/001_tier1_v2_up.sql`
+- `scripts/migrations/002_tier1_data_quality_up.sql`
 
 新增表：
 
@@ -113,9 +145,12 @@ python main.py verify-tier1-sources --as-of 2026-08-10 --symbols 000651
 - `risk_warning_intervals`
 - `tier1_decisions`
 - `source_lineage`
+- `data_quality_assessments`
+- `source_verification_reports`
 
 迁移是增量式的，不修改旧5张表。同一股票、同一as-of在不同run中可以并存。
-回滚脚本只删除阶段A新增表，旧表和旧数据保留。
+002迁移会在 `screening_runs` 增加质量摘要。已有001数据库可以直接升级且重复执行
+迁移安全。回滚脚本只删除阶段A新增表，旧表和旧数据保留。
 
 ## 6. 测试与验收
 
@@ -124,13 +159,14 @@ python main.py verify-tier1-sources --as-of 2026-08-10 --symbols 000651
 ```bash
 python -m pip install -r requirements-dev.txt
 python -m pytest -q
-python -m ruff check --select F main.py config/tier1.py src/data/point_in_time src/screening/tier1_v2 src/storage/tier1_repository.py tests
+python -m ruff check --select F main.py config/tier1.py src/data/point_in_time src/data/quality src/screening/tier1_v2 src/storage/tier1_repository.py tests
 ```
 
 覆盖严格边界、跨年连续窗口、累计转单季、未来公告/修订排除、非正利润基数、
 所有无效数值不放行、主源失败后备用源补充、全部源失败、送转复权防重算、
-迁移/回滚不破坏旧表、Tushare/BaoStock单位和能力边界、多源差异告警，以及从
-数据契约到数据库决策的端到端合成测试。
+迁移/回滚不破坏旧表、Tushare/BaoStock单位和能力边界、多源差异告警、关键未来
+数据泄漏和重复粒度闸门、旧001数据库升级，以及从数据契约到数据库决策的端到端
+合成测试。
 
 真实源测试与单元测试隔离，只有显式启用才访问网络：
 

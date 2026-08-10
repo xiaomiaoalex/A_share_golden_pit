@@ -21,7 +21,7 @@ class Tier1Config:
     dividend_tax_basis: str = "PRE_TAX"
     current_supplier_window_days: int = 7
     pe_mismatch_warning_ratio: float = 0.05
-    calculation_version: str = "tier1-v2.0.0"
+    calculation_version: str = "tier1-v2.1.0"
 
     def to_dict(self) -> dict:
         return asdict(self)

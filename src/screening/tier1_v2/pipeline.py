@@ -14,6 +14,7 @@ from src.data.point_in_time.contracts import (
     FetchStatus,
     UniverseItem,
 )
+from src.data.quality import assess_envelope, gate_envelope
 from src.storage.tier1_repository import Tier1Repository
 
 from .contracts import MarketSnapshot, Tier1Decision
@@ -61,7 +62,9 @@ class Tier1Pipeline:
             universe = list(universe_items)
         else:
             universe_envelope = self.provider.get_universe(as_of_date)
-            self.repository.save_observation(run_id, None, "universe", universe_envelope)
+            universe_envelope, _ = self._record_and_gate(
+                run_id, None, "universe", universe_envelope, as_of_date
+            )
             if universe_envelope.usable:
                 universe = list(universe_envelope.data)
             elif symbols:
@@ -81,7 +84,12 @@ class Tier1Pipeline:
                     universe_size=0,
                     errors=[universe_envelope.error_message or "无法获取股票池"],
                 )
-                return {"run_id": run_id, "status": "FAILED", "summary": {}}
+                return {
+                    "run_id": run_id,
+                    "status": "FAILED",
+                    "summary": {},
+                    "data_quality": self.repository.quality_summary(run_id),
+                }
 
         if symbols:
             wanted = {str(symbol).zfill(6) for symbol in symbols}
@@ -95,6 +103,40 @@ class Tier1Pipeline:
                 )
                 for symbol in sorted(wanted - existing)
             )
+
+        normalized_universe = DataEnvelope(
+            status=FetchStatus.SUCCESS,
+            data=universe,
+            provider="PIPELINE_INPUT",
+            endpoint="normalized_final_universe",
+            request={
+                "as_of_date": as_of_date.isoformat(),
+                "symbols_explicit": bool(symbols),
+                "universe_items_explicit": universe_items is not None,
+                "row_count": len(universe),
+            },
+            available_at=as_of_date,
+            row_count=len(universe),
+        )
+        normalized_universe, _ = self._record_and_gate(
+            run_id, None, "universe", normalized_universe, as_of_date
+        )
+        if not normalized_universe.usable:
+            self.repository.finish_run(
+                run_id,
+                status="FAILED",
+                universe_size=0,
+                errors=[
+                    normalized_universe.error_message or "最终股票池未通过质量闸门"
+                ],
+            )
+            return {
+                "run_id": run_id,
+                "status": "FAILED",
+                "summary": {},
+                "data_quality": self.repository.quality_summary(run_id),
+            }
+        universe = list(normalized_universe.data)
         if limit is not None:
             universe = universe[: max(0, limit)]
 
@@ -149,17 +191,26 @@ class Tier1Pipeline:
             "status": run_status,
             "universe_size": len(universe),
             "summary": self.repository.summary(run_id),
+            "data_quality": self.repository.quality_summary(run_id),
             "errors": run_errors,
         }
 
-    def _record_envelope(
+    def _record_and_gate(
         self,
         run_id: str,
-        symbol: str,
+        symbol: Optional[str],
         field_group: str,
         envelope: DataEnvelope,
-    ) -> int:
-        return self.repository.save_observation(run_id, symbol, field_group, envelope)
+        as_of_date: date,
+    ) -> tuple[DataEnvelope, int]:
+        assessment = assess_envelope(field_group, envelope, as_of_date)
+        observation_id = self.repository.save_observation(
+            run_id, symbol, field_group, envelope
+        )
+        self.repository.save_quality_assessment(
+            run_id, symbol, observation_id, assessment
+        )
+        return gate_envelope(envelope, assessment), observation_id
 
     @staticmethod
     def _is_error(envelope: DataEnvelope) -> bool:
@@ -178,7 +229,9 @@ class Tier1Pipeline:
         risk_warning: Optional[bool] = None
 
         market_env = self.provider.get_market_snapshot(item.symbol, as_of_date)
-        market_obs = self._record_envelope(run_id, item.symbol, "market", market_env)
+        market_env, market_obs = self._record_and_gate(
+            run_id, item.symbol, "market", market_env, as_of_date
+        )
         warnings.extend(market_env.quality_warnings)
         if market_env.usable:
             market = replace(market_env.data, source_observation_id=market_obs)
@@ -190,7 +243,7 @@ class Tier1Pipeline:
                 available_at=market.price_date,
                 raw_value=market.supplier_pe_ttm,
                 calculated_value=market.supplier_pe_ttm,
-                calculation_note="AKShare stock_value_em PE(TTM)",
+                calculation_note=f"{market.source}供应商PE(TTM)",
             )
             self.repository.save_lineage(
                 run_id,
@@ -216,16 +269,22 @@ class Tier1Pipeline:
             mismatch_warning_ratio=self.config.pe_mismatch_warning_ratio,
         )
 
-        must_fetch_financials = historical or initial_pe.selected is None or (
-            initial_pe.selected < self.config.max_pe_ttm
+        must_fetch_financials = (
+            historical
+            or initial_pe.selected is None
+            or (initial_pe.selected < self.config.max_pe_ttm)
         )
         self_pe = None
         financial_env = None
         financial_obs = None
         if must_fetch_financials:
             financial_env = self.provider.get_financial_facts(item.symbol, as_of_date)
-            financial_obs = self._record_envelope(
-                run_id, item.symbol, "financial_statements", financial_env
+            financial_env, financial_obs = self._record_and_gate(
+                run_id,
+                item.symbol,
+                "financial_statements",
+                financial_env,
+                as_of_date,
             )
             warnings.extend(financial_env.quality_warnings)
             if financial_env.usable:
@@ -248,7 +307,9 @@ class Tier1Pipeline:
                     item.symbol,
                     "self_pe_ttm",
                     source_observation_id=financial_obs,
-                    source_period=trend_window[-1].quarter.isoformat() if trend_window else None,
+                    source_period=trend_window[-1].quarter.isoformat()
+                    if trend_window
+                    else None,
                     available_at=financial_env.available_at,
                     raw_value={
                         "market_cap": market.market_cap if market else None,
@@ -291,14 +352,21 @@ class Tier1Pipeline:
             )
         else:
             dividend_env = self.provider.get_dividend_bundle(item.symbol, as_of_date)
-            dividend_obs = self._record_envelope(
-                run_id, item.symbol, "dividend_and_actions", dividend_env
+            dividend_env, dividend_obs = self._record_and_gate(
+                run_id,
+                item.symbol,
+                "dividend_and_actions",
+                dividend_env,
+                as_of_date,
             )
             warnings.extend(dividend_env.quality_warnings)
             bundle: Optional[DividendBundle] = None
             if dividend_env.usable:
                 bundle = dividend_env.data
-            elif dividend_env.status == FetchStatus.EMPTY and dividend_env.data is not None:
+            elif (
+                dividend_env.status == FetchStatus.EMPTY
+                and dividend_env.data is not None
+            ):
                 bundle = dividend_env.data
             elif self._is_error(dividend_env):
                 errors.append("dividend_and_actions")
@@ -344,8 +412,12 @@ class Tier1Pipeline:
             risk_env = self.provider.get_risk_warning_status(
                 item.symbol, item.name, as_of_date
             )
-            risk_obs = self._record_envelope(
-                run_id, item.symbol, "risk_warning_status", risk_env
+            risk_env, risk_obs = self._record_and_gate(
+                run_id,
+                item.symbol,
+                "risk_warning_status",
+                risk_env,
+                as_of_date,
             )
             warnings.extend(risk_env.quality_warnings)
             if risk_env.usable:
@@ -360,7 +432,7 @@ class Tier1Pipeline:
                     available_at=risk.effective_date or as_of_date,
                     raw_value=risk.security_name,
                     calculated_value=risk.is_risk_warning,
-                    calculation_note="按as_of_date证券简称或风险警示板判定",
+                    calculation_note=f"按{risk.source}在as_of_date的有效风险状态判定",
                 )
             elif self._is_error(risk_env):
                 errors.append("risk_warning_status")
@@ -369,8 +441,12 @@ class Tier1Pipeline:
 
         if financial_env is None and not known_pe_fail:
             financial_env = self.provider.get_financial_facts(item.symbol, as_of_date)
-            financial_obs = self._record_envelope(
-                run_id, item.symbol, "financial_statements", financial_env
+            financial_env, financial_obs = self._record_and_gate(
+                run_id,
+                item.symbol,
+                "financial_statements",
+                financial_env,
+                as_of_date,
             )
             warnings.extend(financial_env.quality_warnings)
             if financial_env.usable:

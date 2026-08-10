@@ -11,7 +11,7 @@ import hashlib
 import json
 import math
 import re
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from typing import Any, Optional
 
 import pandas as pd
@@ -28,7 +28,9 @@ from .contracts import DataEnvelope, DividendBundle, FetchStatus, UniverseItem
 
 
 def _hash_json(value: Any) -> str:
-    encoded = json.dumps(value, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8")
+    encoded = json.dumps(value, ensure_ascii=False, sort_keys=True, default=str).encode(
+        "utf-8"
+    )
     return hashlib.sha256(encoded).hexdigest()
 
 
@@ -52,7 +54,9 @@ def _number(value: object) -> Optional[float]:
 
 
 def _date(value: object) -> Optional[date]:
-    if value is None or (not isinstance(value, (str, date, datetime)) and pd.isna(value)):
+    if value is None or (
+        not isinstance(value, (str, date, datetime)) and pd.isna(value)
+    ):
         return None
     try:
         parsed = pd.to_datetime(value, errors="coerce")
@@ -141,10 +145,19 @@ class AKSharePointInTimeProvider:
             return self._error(endpoint, request, exc)
         if df is None or df.empty:
             return DataEnvelope(
-                FetchStatus.EMPTY, None, self.provider_name, endpoint, request, row_count=0
+                FetchStatus.EMPTY,
+                None,
+                self.provider_name,
+                endpoint,
+                request,
+                row_count=0,
             )
-        code_col = "code" if "code" in df.columns else "代码" if "代码" in df.columns else None
-        name_col = "name" if "name" in df.columns else "名称" if "名称" in df.columns else None
+        code_col = (
+            "code" if "code" in df.columns else "代码" if "代码" in df.columns else None
+        )
+        name_col = (
+            "name" if "name" in df.columns else "名称" if "名称" in df.columns else None
+        )
         if not code_col or not name_col:
             return self._schema_error(endpoint, request, df, {"code", "name"})
         items = [
@@ -158,7 +171,9 @@ class AKSharePointInTimeProvider:
         ]
         warnings: list[str] = []
         if as_of_date < self.today:
-            warnings.append("当前代码表用于历史as-of可能存在退市样本缺失；建议传入点时股票池")
+            warnings.append(
+                "当前代码表用于历史as-of可能存在退市样本缺失；建议传入点时股票池"
+            )
         payload = {"columns": list(map(str, df.columns)), "row_count": len(df)}
         return DataEnvelope(
             FetchStatus.SUCCESS,
@@ -184,7 +199,12 @@ class AKSharePointInTimeProvider:
             return self._error(endpoint, request, exc)
         if df is None or df.empty:
             return DataEnvelope(
-                FetchStatus.EMPTY, None, self.provider_name, endpoint, request, row_count=0
+                FetchStatus.EMPTY,
+                None,
+                self.provider_name,
+                endpoint,
+                request,
+                row_count=0,
             )
         required = {"数据日期", "当日收盘价", "总市值", "总股本", "PE(TTM)"}
         missing = required.difference(df.columns)
@@ -216,7 +236,10 @@ class AKSharePointInTimeProvider:
             supplier_pe_ttm=_number(row["PE(TTM)"]),
             source=f"{self.provider_name}:{endpoint}",
         )
-        raw = {str(key): value for key, value in row.drop(labels=["_date"]).to_dict().items()}
+        raw = {
+            str(key): value
+            for key, value in row.drop(labels=["_date"]).to_dict().items()
+        }
         return DataEnvelope(
             FetchStatus.SUCCESS,
             snapshot,
@@ -242,7 +265,12 @@ class AKSharePointInTimeProvider:
             return self._error(endpoint, request, exc)
         if df is None or df.empty:
             return DataEnvelope(
-                FetchStatus.EMPTY, None, self.provider_name, endpoint, request, row_count=0
+                FetchStatus.EMPTY,
+                None,
+                self.provider_name,
+                endpoint,
+                request,
+                row_count=0,
             )
         required = {"REPORT_DATE", "NOTICE_DATE", "OPERATE_INCOME", "PARENT_NETPROFIT"}
         missing = required.difference(df.columns)
@@ -365,7 +393,11 @@ class AKSharePointInTimeProvider:
                     )
                 )
             transfer_per_ten = _number(row.get("送转股份-送转总比例"))
-            if transfer_per_ten is not None and transfer_per_ten > 0 and "实施" in status:
+            if (
+                transfer_per_ten is not None
+                and transfer_per_ten > 0
+                and "实施" in status
+            ):
                 actions.append(
                     CorporateAction(
                         symbol=str(symbol).zfill(6),
@@ -409,7 +441,13 @@ class AKSharePointInTimeProvider:
             if df is None:
                 self._current_st_symbols = set()
                 return
-            code_col = "代码" if "代码" in df.columns else "证券代码" if "证券代码" in df.columns else None
+            code_col = (
+                "代码"
+                if "代码" in df.columns
+                else "证券代码"
+                if "证券代码" in df.columns
+                else None
+            )
             if code_col is None:
                 raise ValueError(f"ST列表缺少代码列: {list(df.columns)}")
             self._current_st_symbols = {
@@ -431,7 +469,9 @@ class AKSharePointInTimeProvider:
             self._sz_name_changes["_date"] = pd.to_datetime(
                 self._sz_name_changes["变更日期"], errors="coerce"
             )
-            self._sz_name_changes["_symbol"] = self._sz_name_changes["证券代码"].astype(str).str.zfill(6)
+            self._sz_name_changes["_symbol"] = (
+                self._sz_name_changes["证券代码"].astype(str).str.zfill(6)
+            )
         except Exception as exc:
             self._sz_name_changes_error = f"{type(exc).__name__}: {exc}"
 
@@ -442,9 +482,9 @@ class AKSharePointInTimeProvider:
         as_of_date: date,
     ) -> DataEnvelope[RiskWarningStatus]:
         code = str(symbol).zfill(6)
-        is_current = as_of_date >= self.today - timedelta(
-            days=self.current_window_days
-        )
+        # Current ST lists are not point-in-time history.  Even a recent past
+        # as-of date must use an effective-dated source or remain unavailable.
+        is_current = as_of_date == self.today
         if is_current:
             self._load_current_st_symbols()
             by_name = self._is_st_name(stock_name)
@@ -506,7 +546,9 @@ class AKSharePointInTimeProvider:
                     error_type="HistoricalRiskStatusUnavailable",
                     error_message=self._sz_name_changes_error,
                 )
-            rows = self._sz_name_changes[self._sz_name_changes["_symbol"] == code].sort_values("_date")
+            rows = self._sz_name_changes[
+                self._sz_name_changes["_symbol"] == code
+            ].sort_values("_date")
             if rows.empty:
                 historical_name = stock_name
                 effective_date = None
@@ -544,5 +586,7 @@ class AKSharePointInTimeProvider:
             self.provider_name,
             "historical_risk_warning_status",
             {"symbol": code, "as_of_date": as_of_date.isoformat()},
-            quality_warnings=["沪市/北交所历史风险警示生效区间暂无可靠免费点时源，严格留待补数"],
+            quality_warnings=[
+                "沪市/北交所历史风险警示生效区间暂无可靠免费点时源，严格留待补数"
+            ],
         )

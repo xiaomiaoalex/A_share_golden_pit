@@ -474,6 +474,13 @@ def build_parser() -> argparse.ArgumentParser:
     verify_sources_parser.add_argument('--as-of', required=True, help='验证日期 YYYY-MM-DD')
     verify_sources_parser.add_argument('--symbols', nargs='+', required=True, help='股票代码列表')
     verify_sources_parser.add_argument('--output', help='可选JSON输出文件')
+    verify_sources_parser.add_argument(
+        '--db', default=str(settings.DB_PATH), help='质量验证记录SQLite路径'
+    )
+    verify_sources_parser.add_argument('--run-id', help='可选：绑定已有Tier1筛选运行')
+    verify_sources_parser.add_argument(
+        '--no-persist', action='store_true', help='仅输出结果，不写入质量验证记录'
+    )
 
     show_tier1_parser = subparsers.add_parser('show-tier1', help='查看Tier1 v2某次运行结果')
     show_tier1_parser.add_argument('--run-id', required=True, help='筛选运行ID')
@@ -610,6 +617,7 @@ def _run_tier1_command(args) -> None:
     print(f"status: {result['status']}")
     print(f"universe_size: {result.get('universe_size', 0)}")
     print(f"summary: {result.get('summary', {})}")
+    print(f"data_quality: {result.get('data_quality', {})}")
     if result.get('errors'):
         print(f"errors: {result['errors']}")
 
@@ -617,10 +625,14 @@ def _run_tier1_command(args) -> None:
 def _show_tier1_command(args) -> None:
     from src.storage.tier1_repository import Tier1Repository
 
-    rows = Tier1Repository(args.db).decisions(args.run_id)
+    repository = Tier1Repository(args.db)
+    rows = repository.decisions(args.run_id)
     if not rows:
         print("未找到该run_id的Tier1 v2结果")
         return
+    run_record = repository.run_record(args.run_id)
+    if run_record and run_record.get('data_quality_summary_json'):
+        print(f"data_quality: {run_record['data_quality_summary_json']}")
     columns = [
         'symbol', 'stock_name', 'screen_status', 'business_status', 'data_status',
         'selected_pe_ttm', 'dividend_yield_ttm', 'trend_quarters_json',
@@ -635,6 +647,7 @@ def _verify_tier1_sources_command(args) -> None:
     from config.tier1 import Tier1Config
     from src.data.point_in_time.provider_factory import build_point_in_time_provider
     from src.data.point_in_time.reconciliation import verify_symbol_sources
+    from src.storage.tier1_repository import Tier1Repository
 
     as_of_date = _parse_as_of(args.as_of)
     config = Tier1Config()
@@ -654,6 +667,12 @@ def _verify_tier1_sources_command(args) -> None:
         "configuration_warnings": provider.configuration_warnings,
         "reports": reports,
     }
+    if not args.no_persist:
+        repository = Tier1Repository(args.db)
+        output["persisted_verification_ids"] = [
+            repository.save_source_verification(report, run_id=args.run_id)
+            for report in reports
+        ]
     serialized = json.dumps(output, ensure_ascii=False, indent=2)
     if args.output:
         Path(args.output).write_text(serialized + "\n", encoding="utf-8")

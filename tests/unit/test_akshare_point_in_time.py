@@ -11,7 +11,9 @@ class FakeAK:
         self.last_financial_symbol = None
 
     def stock_info_a_code_name(self):
-        return pd.DataFrame({"code": ["688001", "920001"], "name": ["科创测试", "北交测试"]})
+        return pd.DataFrame(
+            {"code": ["688001", "920001"], "name": ["科创测试", "北交测试"]}
+        )
 
     def stock_value_em(self, symbol):
         return pd.DataFrame(
@@ -106,12 +108,8 @@ def test_dividend_adapter_preserves_raw_per_share_and_action_factor():
 
 def test_historical_sz_risk_status_uses_effective_name_change_date():
     provider = AKSharePointInTimeProvider(FakeAK(), today=date(2026, 8, 10))
-    during_st = provider.get_risk_warning_status(
-        "000001", "正常公司", date(2020, 6, 1)
-    )
-    after_st = provider.get_risk_warning_status(
-        "000001", "正常公司", date(2021, 6, 1)
-    )
+    during_st = provider.get_risk_warning_status("000001", "正常公司", date(2020, 6, 1))
+    after_st = provider.get_risk_warning_status("000001", "正常公司", date(2021, 6, 1))
     assert during_st.data.is_risk_warning is True
     assert after_st.data.is_risk_warning is False
 
@@ -121,3 +119,12 @@ def test_historical_sh_risk_status_is_pending_not_false():
     result = provider.get_risk_warning_status("600001", "测试", date(2020, 6, 1))
     assert result.status == FetchStatus.EMPTY
     assert result.data is None
+
+
+def test_recent_past_as_of_never_uses_current_st_list():
+    provider = AKSharePointInTimeProvider(FakeAK(), today=date(2026, 8, 10))
+
+    result = provider.get_risk_warning_status("000001", "正常公司", date(2026, 8, 9))
+
+    assert result.endpoint == "stock_info_sz_change_name"
+    assert result.data.security_name == "正常公司"
