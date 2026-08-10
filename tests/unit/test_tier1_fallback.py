@@ -1,6 +1,6 @@
 from datetime import date, datetime
 
-from src.data.point_in_time.contracts import DataEnvelope, FetchStatus
+from src.data.point_in_time.contracts import DataEnvelope, FetchStatus, UniverseItem
 from src.data.point_in_time.fallback import FallbackPointInTimeProvider
 from src.screening.tier1_v2.contracts import MarketSnapshot
 
@@ -12,6 +12,24 @@ class MarketProvider:
 
     def get_market_snapshot(self, symbol, as_of_date):
         return self.envelope
+
+
+class UniverseProvider:
+    def __init__(self, provider_name, symbols):
+        self.provider_name = provider_name
+        self.symbols = symbols
+        self.today = date(2026, 8, 10)
+        self.call_count = 0
+
+    def get_universe(self, as_of_date):
+        self.call_count += 1
+        return DataEnvelope(
+            FetchStatus.SUCCESS,
+            [UniverseItem(symbol, symbol, "SZ") for symbol in self.symbols],
+            self.provider_name,
+            "universe",
+            {"as_of_date": as_of_date.isoformat()},
+        )
 
 
 def envelope(status, data=None, provider="source"):
@@ -57,3 +75,29 @@ def test_all_sources_failed_remains_error():
     result = provider.get_market_snapshot("000001", date(2026, 8, 10))
     assert result.status == FetchStatus.ERROR
     assert result.data is None
+
+
+def test_historical_universe_skips_limited_source_and_uses_exact_source():
+    limited = UniverseProvider("AKShare", ["000001"])
+    exact = UniverseProvider("Tushare Pro", ["000001", "000002"])
+    provider = FallbackPointInTimeProvider(limited, exact)
+
+    result = provider.get_universe(date(2020, 12, 31))
+
+    assert result.provider == "Tushare Pro"
+    assert [item.symbol for item in result.data] == ["000001", "000002"]
+    assert limited.call_count == 0
+    assert exact.call_count == 1
+
+
+def test_historical_universe_fails_closed_without_exact_source():
+    akshare = UniverseProvider("AKShare", ["000001"])
+    baostock = UniverseProvider("BaoStock", ["000001"])
+    provider = FallbackPointInTimeProvider(akshare, baostock)
+
+    result = provider.get_universe(date(2020, 12, 31))
+
+    assert result.status == FetchStatus.ERROR
+    assert result.error_type == "NO_QUALIFIED_SOURCE"
+    assert akshare.call_count == 0
+    assert baostock.call_count == 0

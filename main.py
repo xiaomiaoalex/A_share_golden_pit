@@ -3,8 +3,8 @@
 A股黄金坑股票数据库 - CLI主入口
 
 使用方法:
-    python main.py scan           # 全量三层扫描
-    python main.py scan --quick   # 快速扫描（仅Tier1）
+    python main.py workflow --as-of 2026-08-10 --symbols 000651
+    python main.py legacy-scan --i-understand-this-uses-legacy-rules
     python main.py stock 000002   # 单股票深度分析
     python main.py show --tier 3  # 查看Tier3结果
     python main.py report         # 生成报告
@@ -17,8 +17,8 @@ import logging
 import re
 import sys
 import time
+from datetime import date, datetime
 from pathlib import Path
-from datetime import date, datetime, timedelta
 
 import pandas as pd
 
@@ -451,8 +451,8 @@ def build_parser() -> argparse.ArgumentParser:
   python main.py export-tier3 --run-id RUN_ID --classification-file industries.json
   python main.py import-tier3 --file tier3_results.json
   python main.py review-tier3 --run-id RUN_ID
-  python main.py scan                  # 全量三层扫描
-  python main.py scan --quick          # 快速扫描（仅Tier1）
+  python main.py workflow --as-of 2026-08-10 --symbols 000651
+  python main.py legacy-scan --i-understand-this-uses-legacy-rules
   python main.py stock 000002          # 分析万科A
   python main.py show --tier 3         # 查看核心黄金坑
   python main.py report                # 生成报告
@@ -564,9 +564,25 @@ def build_parser() -> argparse.ArgumentParser:
     migrate_tier3_parser.add_argument('--rollback', action='store_true', help='仅删除Stage C新增表')
     migrate_tier3_parser.add_argument('--db', default=str(settings.DB_PATH), help='SQLite数据库路径')
 
-    # scan 命令
-    scan_parser = subparsers.add_parser('scan', help='执行全量扫描')
-    scan_parser.add_argument('--quick', action='store_true', help='快速扫描模式')
+    workflow_parser = subparsers.add_parser(
+        'workflow', help='启动或检查正式Stage A→B→C工作流'
+    )
+    workflow_parser.add_argument('--as-of', help='新建工作流时的筛选日期 YYYY-MM-DD')
+    workflow_parser.add_argument('--run-id', help='检查已有正式工作流')
+    workflow_parser.add_argument('--symbols', nargs='+', help='新建工作流时的股票代码列表')
+    workflow_parser.add_argument('--universe-file', help='新建工作流时的点时股票池CSV')
+    workflow_parser.add_argument('--limit', type=int, help='新建工作流时仅处理前N只')
+    workflow_parser.add_argument('--db', default=str(settings.DB_PATH), help='SQLite数据库路径')
+
+    legacy_scan_parser = subparsers.add_parser(
+        'legacy-scan', help='兼容旧版三层扫描（不使用正式A/B/C口径）'
+    )
+    legacy_scan_parser.add_argument('--quick', action='store_true', help='旧版快速扫描模式')
+    legacy_scan_parser.add_argument(
+        '--i-understand-this-uses-legacy-rules',
+        action='store_true',
+        help='确认结果不得作为正式黄金坑数据库结论',
+    )
 
     # stock 命令
     stock_parser = subparsers.add_parser('stock', help='单股票分析')
@@ -649,7 +665,7 @@ def _load_universe_file(path: str):
     return items
 
 
-def _run_tier1_command(args) -> None:
+def _run_tier1_command(args) -> dict:
     from src.data.point_in_time.provider_factory import build_point_in_time_provider
     from src.screening.tier1_v2.pipeline import Tier1Pipeline
     from src.storage.tier1_repository import Tier1Repository
@@ -662,11 +678,8 @@ def _run_tier1_command(args) -> None:
     provider = build_point_in_time_provider(tier1_config)
     if as_of_date > provider.today:
         raise ValueError("--as-of 不得晚于当前日期")
-    historical = (
-        as_of_date
-        < provider.today - timedelta(days=tier1_config.current_supplier_window_days)
-    )
-    if historical and not args.universe_file and not args.symbols:
+    historical_universe = as_of_date < provider.today
+    if historical_universe and not args.universe_file and not args.symbols:
         raise ValueError(
             "历史全市场筛选必须通过--universe-file提供点时股票池；"
             "也可用--symbols做指定股票历史复算"
@@ -692,6 +705,100 @@ def _run_tier1_command(args) -> None:
     print(f"data_quality: {result.get('data_quality', {})}")
     if result.get('errors'):
         print(f"errors: {result['errors']}")
+    return result
+
+
+def _formal_workflow_command(args) -> None:
+    from src.storage.tier1_repository import Tier1Repository
+    from src.storage.tier2_repository import Tier2Repository
+    from src.storage.tier3_repository import Tier3Repository
+
+    if bool(args.as_of) == bool(args.run_id):
+        raise ValueError("workflow必须二选一提供--as-of（启动）或--run-id（检查）")
+    run_id = args.run_id
+    if args.as_of:
+        result = _run_tier1_command(args)
+        run_id = result["run_id"]
+
+    tier1 = Tier1Repository(args.db)
+    run = tier1.run_record(run_id)
+    if run is None:
+        raise ValueError(f"未知正式工作流run_id: {run_id}")
+    decisions = tier1.decisions(run_id)
+    tier1_pass = [row for row in decisions if row["screen_status"] == "PASS"]
+    tier2_rows = Tier2Repository(args.db).review_summary(run_id)
+    tier3_rows = Tier3Repository(args.db).summary(run_id)
+    tier1_pass_symbols = {row["symbol"] for row in tier1_pass}
+    tier2_symbols = {row["symbol"] for row in tier2_rows}
+    missing_tier2 = sorted(tier1_pass_symbols - tier2_symbols)
+    tier2_pass_symbols = {
+        row["symbol"] for row in tier2_rows if row.get("human_decision") == "PASS"
+    }
+    current_tier3_rows = [
+        row for row in tier3_rows if row["symbol"] in tier2_pass_symbols
+    ]
+    tier3_symbols = {row["symbol"] for row in current_tier3_rows}
+    missing_tier3 = sorted(tier2_pass_symbols - tier3_symbols)
+
+    if str(run["status"]) not in {"FINISHED", "FINISHED_WITH_ERRORS"}:
+        next_action = "等待或重新执行Stage A"
+    elif not tier1_pass:
+        next_action = "Stage A无PASS候选；工作流结束"
+    elif missing_tier2:
+        symbols = " ".join(missing_tier2)
+        next_action = (
+            f"python main.py export-tier2 --run-id {run_id} --symbols {symbols}"
+        )
+    elif any(
+        row.get("system_recommendation") is None
+        for row in tier2_rows
+        if row["symbol"] in tier1_pass_symbols
+    ):
+        next_action = "完成人工AI研究后执行 import-tier2"
+    elif any(
+        row.get("human_decision") is None
+        for row in tier2_rows
+        if row["symbol"] in tier1_pass_symbols
+    ):
+        next_action = f"python main.py review-tier2 --run-id {run_id}"
+    elif not tier2_pass_symbols:
+        next_action = "Stage B无人工PASS候选；工作流结束"
+    elif missing_tier3:
+        symbols = " ".join(missing_tier3)
+        next_action = (
+            f"为以下股票准备industries.json：{symbols}；然后执行 python main.py "
+            f"export-tier3 --run-id {run_id} --classification-file industries.json；"
+            "填写后执行 import-tier3"
+        )
+    elif any(int(row.get("upstream_current", 0)) != 1 for row in current_tier3_rows):
+        next_action = "Stage B上游证据已变化；重新导出、研究并导入Stage C"
+    elif any(row.get("human_decision") is None for row in current_tier3_rows):
+        next_action = f"python main.py review-tier3 --run-id {run_id}"
+    else:
+        next_action = "正式A→B→C工作流已完成"
+
+    summary = {
+        "run_id": run_id,
+        "stage_a": {
+            "run_status": run["status"],
+            "decision_count": len(decisions),
+            "pass_count": len(tier1_pass),
+        },
+        "stage_b": {
+            "expected_count": len(tier1_pass_symbols),
+            "candidate_count": len(tier2_rows),
+            "human_pass_count": len(tier2_pass_symbols),
+        },
+        "stage_c": {
+            "eligible_count": len(tier2_pass_symbols),
+            "assessment_count": len(current_tier3_rows),
+            "human_pass_count": sum(
+                row.get("human_decision") == "PASS" for row in current_tier3_rows
+            ),
+        },
+        "next_action": next_action,
+    }
+    print(json.dumps(summary, ensure_ascii=False, indent=2))
 
 
 def _show_tier1_command(args) -> None:
@@ -911,6 +1018,7 @@ def _export_tier3_command(args) -> None:
         args.run_id,
         load_classifications(args.classification_file),
         output_dir,
+        classification_base_dir=Path(args.classification_file).resolve().parent,
     )
     print(f"Stage C风险研究模板数量: {result['template_count']}")
     print(f"规则版本: {result['rules_version']}")
@@ -1046,6 +1154,11 @@ def main():
     """主入口函数"""
     setup_logging()
     parser = build_parser()
+    if len(sys.argv) > 1 and sys.argv[1] == 'scan':
+        parser.error(
+            "scan是已停用的旧入口；正式流程请使用workflow。"
+            "如确需兼容旧算法，请显式使用legacy-scan并确认风险"
+        )
     args = parser.parse_args()
 
     if not args.command:
@@ -1089,6 +1202,16 @@ def main():
         if args.command == 'tier3-migrate':
             _migrate_tier3_command(args)
             return
+        if args.command == 'workflow':
+            _formal_workflow_command(args)
+            return
+        if (
+            args.command == 'legacy-scan'
+            and not args.i_understand_this_uses_legacy_rules
+        ):
+            raise ValueError(
+                "legacy-scan必须提供--i-understand-this-uses-legacy-rules"
+            )
     except (TypeError, ValueError, OSError) as exc:
         parser.error(str(exc))
 
@@ -1096,7 +1219,7 @@ def main():
     app = GoldenPitApp()
 
     try:
-        if args.command == 'scan':
+        if args.command == 'legacy-scan':
             print("\n开始执行A股黄金坑全量扫描...\n")
             result = app.run_full_scan()
             print("\n扫描完成!")

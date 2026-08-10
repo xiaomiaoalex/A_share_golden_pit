@@ -10,6 +10,9 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import date
 
+from src.data.quality.registry import capability_for
+from src.data.quality.types import CapabilityLevel
+
 from .contracts import DataEnvelope, FetchStatus
 
 
@@ -48,10 +51,11 @@ class FallbackPointInTimeProvider:
             "error_message": envelope.error_message,
         }
 
-    def _call(self, method: str, *args) -> DataEnvelope:
+    def _call(self, method: str, *args, providers=None) -> DataEnvelope:
         attempts = []
         last = None
-        for provider in self.providers:
+        selected_providers = self.providers if providers is None else list(providers)
+        for provider in selected_providers:
             envelope = getattr(provider, method)(*args)
             attempts.append(self._trace(envelope))
             last = envelope
@@ -73,7 +77,18 @@ class FallbackPointInTimeProvider:
                         "fallback_trace": attempts,
                     },
                 )
-        assert last is not None
+        if last is None:
+            return DataEnvelope(
+                status=FetchStatus.ERROR,
+                data=None,
+                provider="fallback-chain",
+                endpoint=method,
+                request={"args": [str(item) for item in args]},
+                error_type="NO_QUALIFIED_SOURCE",
+                error_message="没有满足点时能力要求的数据源",
+                quality_warnings=list(self.configuration_warnings),
+                raw_payload={"fallback_trace": attempts},
+            )
         status = (
             FetchStatus.ERROR
             if any(item["status"] in {"ERROR", "SCHEMA_ERROR"} for item in attempts)
@@ -93,6 +108,14 @@ class FallbackPointInTimeProvider:
         )
 
     def get_universe(self, as_of_date: date):
+        if as_of_date < self.today:
+            exact = [
+                provider
+                for provider in self.providers
+                if capability_for(provider.provider_name, "universe")
+                == CapabilityLevel.EXACT
+            ]
+            return self._call("get_universe", as_of_date, providers=exact)
         return self._call("get_universe", as_of_date)
 
     def get_market_snapshot(self, symbol: str, as_of_date: date):

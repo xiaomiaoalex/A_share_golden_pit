@@ -72,7 +72,7 @@ def select_pe_ttm(
     selected = supplier if supplier is not None else self_value
     method = None
     if supplier is not None:
-        method = "VALIDATED_SUPPLIER"
+        method = "SUPPLIER_FIELD_CONTRACT_VALIDATED"
     elif self_value is not None:
         method = "CURRENT_SELF_COMPUTED_FALLBACK"
     return PESelection(

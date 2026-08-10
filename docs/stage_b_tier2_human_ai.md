@@ -39,12 +39,16 @@ Tier1 PASS
 
 每个包保存SHA-256内容哈希。AI结果必须原样返回 `package_id`、哈希、run、股票和
 as-of；任一不一致都按陈旧证据或串股结果拒绝。AI可以补充截至as-of已经公开的公司
-公告、官方数据和行业资料，但非证据不足结论必须同时包含事实和可定位来源，来源
-日期不得晚于as-of。
+公告、官方数据和行业资料，但非证据不足结论必须同时包含事实和可定位来源。导入器
+不会实时打开URL，而是校验截至as-of已经保存的本地不可变快照：发布日期不得晚于
+as-of，`available_at` 必须是带时区的点时可得时间且不得越界，文件SHA-256必须匹配，
+摘录必须能在快照文本中定位，`supported_claims` 必须覆盖该维度的全部事实。PDF等
+二进制原件必须另附可检索文本和文本哈希。任一条件不满足时整条结果拒绝导入，而
+不是降级为“已引用”。
 
 ## 3. JSON契约和人工复核
 
-固定Schema为 `config/tier2_ai_schema.json`，提示词为
+固定Schema为 `config/tier2_ai_schema.json`（`tier2-ai-v1.1`），提示词为
 `docs/tier2_ai_prompt_template.md`。七个维度必须各出现一次：
 
 1. `demand_durability`
@@ -103,5 +107,6 @@ python -m ruff check --select F main.py config/tier1.py \
 ```
 
 测试覆盖：只导出Tier1 PASS、证据缺口不隐藏、未来数据拒绝、Schema非法拒绝、批量
-原子性、证据哈希绑定、关键证据不足只能REVIEW、维度FAIL硬否决、人工不可上调、
-人工确认必需、Stage B回滚保留Stage A和旧表。默认测试不访问网络。
+原子性、证据哈希绑定、来源快照哈希/摘录/事实映射校验、关键证据不足只能REVIEW、
+维度FAIL硬否决、人工不可上调、人工确认必需、Stage B回滚保留Stage A和旧表。
+默认测试不访问网络。

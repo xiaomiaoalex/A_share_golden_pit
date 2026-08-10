@@ -1,11 +1,11 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://golden-pit.local/schema/tier3-risk-input-v1.0.json",
+  "$id": "https://golden-pit.local/schema/tier3-risk-input-v1.1.json",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema_version", "run_id", "symbol", "as_of_date", "tier2_review_id", "industry_classification", "checks", "falsification_conditions", "overall_notes"],
   "properties": {
-    "schema_version": {"const": "tier3-risk-input-v1.0"},
+    "schema_version": {"const": "tier3-risk-input-v1.1"},
     "run_id": {"type": "string", "minLength": 1},
     "symbol": {"type": "string", "pattern": "^[0-9]{6}$"},
     "as_of_date": {"type": "string", "format": "date"},
@@ -27,14 +27,38 @@
   "$defs": {
     "source": {
       "type": "object", "additionalProperties": false,
-      "required": ["title", "publisher", "date", "url_or_document", "page_or_section"],
+      "required": [
+        "title", "publisher", "date", "available_at", "url_or_document",
+        "page_or_section", "snapshot_path", "content_sha256",
+        "evidence_excerpt", "supported_claims"
+      ],
       "properties": {
         "title": {"type": "string", "minLength": 1},
         "publisher": {"type": "string", "minLength": 1},
         "date": {"type": "string", "format": "date"},
+        "available_at": {"type": "string", "format": "date-time"},
         "url_or_document": {"type": "string", "minLength": 1},
-        "page_or_section": {"type": "string", "minLength": 1}
-      }
+        "page_or_section": {"type": "string", "minLength": 1},
+        "snapshot_path": {"type": "string", "minLength": 1},
+        "content_sha256": {"type": "string", "pattern": "^[a-fA-F0-9]{64}$"},
+        "extracted_text_path": {"type": "string", "minLength": 1},
+        "extracted_text_sha256": {"type": "string", "pattern": "^[a-fA-F0-9]{64}$"},
+        "evidence_excerpt": {"type": "string", "minLength": 1},
+        "supported_claims": {
+          "type": "array", "minItems": 1, "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        }
+      },
+      "allOf": [
+        {
+          "if": {"required": ["extracted_text_path"]},
+          "then": {"required": ["extracted_text_sha256"]}
+        },
+        {
+          "if": {"required": ["extracted_text_sha256"]},
+          "then": {"required": ["extracted_text_path"]}
+        }
+      ]
     },
     "metric": {
       "type": "object", "additionalProperties": false,

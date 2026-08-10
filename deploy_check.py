@@ -142,7 +142,7 @@ def main():
     
     print()
     if all_pass:
-        print("  系统就绪！运行: python main.py scan")
+        print("  系统就绪！运行: python main.py workflow --help")
     else:
         print("  部分检查未通过，请先安装缺失的依赖:")
         print("  pip install -r requirements.txt")

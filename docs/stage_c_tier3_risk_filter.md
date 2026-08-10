@@ -70,7 +70,8 @@ Stage C输入Schema为 `config/tier3_risk_input_schema.json`，并执行以下�
 2. 行业分类必须有来源，不能自动猜测；
 3. 检查集合必须与所选行业模型完全一致，不能混入其他行业规则；
 4. `TRIGGERED/CLEAR` 必须同时包含事实、反方证据和来源；
-5. 来源日期不得晚于as-of；
+5. 来源发布日期和带时区的 `available_at` 不得晚于as-of；本地快照哈希、可定位摘录
+   和事实映射必须通过校验；PDF等二进制原件必须另附可检索文本及其哈希；
 6. `UNKNOWN` 置信度不得高于0.5；
 7. NaN、无穷值和Schema异常拒绝导入；
 8. 批量输入先全部验证，任一失败时整批不写库；
@@ -93,15 +94,23 @@ Stage C输入Schema为 `config/tier3_risk_input_schema.json`，并执行以下�
         "title": "年度报告",
         "publisher": "公司名称",
         "date": "2026-03-20",
+        "available_at": "2026-03-20T18:30:00+08:00",
         "url_or_document": "请替换为公告链接或本地文档",
-        "page_or_section": "公司业务概要"
+        "page_or_section": "公司业务概要",
+        "snapshot_path": "evidence/annual-report.txt",
+        "content_sha256": "请替换为64位SHA-256",
+        "evidence_excerpt": "请复制快照中能够支持行业分类的原文片段",
+        "supported_claims": ["主营业务和监管口径均属于商业银行"]
       }
     ]
   }
 ]
 ```
 
-日期和来源必须替换为截至本次as-of真实可得的信息。
+日期、可得时间、来源、快照和哈希必须替换为截至本次as-of真实可得的信息。URL只作
+定位线索，不能替代本地证据快照。行业分类文件中的相对路径以该分类文件所在目录为
+基准，导出时立即验证并规范化为绝对路径；风险检查结果新增来源的相对路径则以待导入
+JSON文件所在目录为基准。
 
 ```bash
 python main.py export-tier3 --run-id RUN_ID \
@@ -146,8 +155,8 @@ python -m ruff check src/risk/tier3 src/storage/tier3_repository.py \
 ```
 
 离线测试覆盖Stage B准入、四种行业模型隔离、全部CLEAR、必要数据UNKNOWN、警告、
-硬否决、价值陷阱、未来来源、NaN、跨行业规则混用、批次原子性、人工不可上调和
-增量回滚。实时接口不作为业务逻辑验收依据。
+硬否决、价值陷阱、未来来源、来源快照篡改、摘录和事实映射、NaN、跨行业规则混用、
+批次原子性、人工不可上调和增量回滚。实时接口不作为业务逻辑验收依据。
 
 当前MVP不会自动抓取所有审计、诉讼、质押、项目现金和监管资本数据，也不会自动
 调用外部AI。系统先把研究结构、证据标准、行业口径和否决逻辑做成可运行闭环；没有

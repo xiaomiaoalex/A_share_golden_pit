@@ -1,7 +1,7 @@
 """Stable business vocabulary for Tier2 v1."""
 
-PACKAGE_VERSION = "tier2-evidence-v1.0"
-SCHEMA_VERSION = "tier2-ai-v1.0"
+PACKAGE_VERSION = "tier2-evidence-v1.1"
+SCHEMA_VERSION = "tier2-ai-v1.1"
 
 DIMENSIONS = (
     "demand_durability",

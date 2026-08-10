@@ -9,13 +9,14 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from src.evidence import verify_sources
 from src.storage.tier3_repository import Tier3Repository
 
 from .models import RiskModelRegistry
 
 
 class Tier3TemplateExporter:
-    schema_version = "tier3-risk-input-v1.0"
+    schema_version = "tier3-risk-input-v1.1"
 
     def __init__(
         self,
@@ -32,6 +33,7 @@ class Tier3TemplateExporter:
         run_id: str,
         classifications: list[dict[str, Any]],
         output_dir: str | Path,
+        classification_base_dir: str | Path | None = None,
     ) -> dict[str, Any]:
         normalized = [self._validate_classification(item) for item in classifications]
         by_symbol = {str(item["symbol"]): item for item in normalized}
@@ -45,15 +47,25 @@ class Tier3TemplateExporter:
         if not candidates:
             raise ValueError("该运行没有可进入Stage C的Stage B人工PASS股票")
 
+        source_root = Path(classification_base_dir or Path.cwd()).resolve()
         prepared = {}
         for candidate in candidates:
             classification = by_symbol[candidate["symbol"]]
             as_of = date.fromisoformat(candidate["as_of_date"])
-            if any(
-                date.fromisoformat(source["date"]) > as_of
-                for source in classification["sources"]
-            ):
-                raise ValueError(f"{candidate['symbol']}行业分类引用了as-of之后的来源")
+            verify_sources(
+                classification["sources"],
+                as_of=as_of,
+                base_dir=source_root,
+                required_claims=[classification["rationale"]],
+                context=f"{candidate['symbol']}.industry_classification",
+            )
+            classification = {
+                **classification,
+                "sources": [
+                    self._absolute_source_paths(source, source_root)
+                    for source in classification["sources"]
+                ],
+            }
             model = self.registry.get(str(classification["industry_model"]))
             tier2_assessment = json.loads(candidate["assessment_json"])
             falsification = tier2_assessment.get("falsification_conditions")
@@ -156,11 +168,27 @@ class Tier3TemplateExporter:
         if not str(value["industry"]).strip() or len(str(value["rationale"]).strip()) < 5:
             raise ValueError(f"{symbol}行业名称或分类依据不足")
         sources = value["sources"]
-        source_fields = {"title", "publisher", "date", "url_or_document", "page_or_section"}
+        source_fields = {
+            "title",
+            "publisher",
+            "date",
+            "available_at",
+            "url_or_document",
+            "page_or_section",
+            "snapshot_path",
+            "content_sha256",
+            "evidence_excerpt",
+            "supported_claims",
+        }
+        optional_source_fields = {"extracted_text_path", "extracted_text_sha256"}
         if not isinstance(sources, list) or not sources:
             raise ValueError(f"{symbol}行业分类缺少来源")
         for source in sources:
-            if not isinstance(source, dict) or set(source) != source_fields:
+            if (
+                not isinstance(source, dict)
+                or not source_fields.issubset(source)
+                or set(source).difference(source_fields | optional_source_fields)
+            ):
                 raise ValueError(f"{symbol}行业分类来源字段不完整")
             try:
                 date.fromisoformat(str(source["date"]))
@@ -169,6 +197,21 @@ class Tier3TemplateExporter:
             if any(not str(source[field]).strip() for field in source_fields - {"date"}):
                 raise ValueError(f"{symbol}行业分类来源存在空字段")
         return {**value, "symbol": symbol}
+
+    @staticmethod
+    def _absolute_source_paths(
+        source: dict[str, Any], base_dir: Path
+    ) -> dict[str, Any]:
+        normalized = dict(source)
+        for field in ("snapshot_path", "extracted_text_path"):
+            value = normalized.get(field)
+            if not value:
+                continue
+            path = Path(str(value)).expanduser()
+            if not path.is_absolute():
+                path = base_dir / path
+            normalized[field] = str(path.resolve())
+        return normalized
 
     @staticmethod
     def render_markdown(candidate, classification, model) -> str:

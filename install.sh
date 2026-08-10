@@ -124,13 +124,13 @@ if [ -d "venv" ]; then
 fi
 
 case "${1:-help}" in
-    scan)
-        echo "执行全量扫描..."
-        python main.py scan
+    workflow)
+        shift
+        python main.py workflow "$@"
         ;;
-    quick)
-        echo "执行快速扫描（仅Tier1雷达池）..."
-        python main.py scan --quick
+    legacy-scan)
+        shift
+        python main.py legacy-scan --i-understand-this-uses-legacy-rules "$@"
         ;;
     stock)
         if [ -z "$2" ]; then
@@ -157,15 +157,16 @@ case "${1:-help}" in
         echo "A股黄金坑股票数据库 - 使用帮助"
         echo ""
         echo "命令:"
-        echo "  ./run.sh scan      全量三层扫描（Tier1→Tier2→Tier3）"
-        echo "  ./run.sh quick     快速扫描（仅Tier1雷达池）"
+        echo "  ./run.sh workflow --as-of YYYY-MM-DD [--symbols ...]  启动正式工作流"
+        echo "  ./run.sh workflow --run-id RUN_ID                    检查正式工作流"
+        echo "  ./run.sh legacy-scan                                 兼容旧算法"
         echo "  ./run.sh stock 000651  单股票深度分析"
         echo "  ./run.sh show [1|2|3]  查看筛选结果（默认Tier3）"
         echo "  ./run.sh report    生成Excel报告和HTML仪表盘"
         echo "  ./run.sh stats     数据库统计信息"
         echo ""
         echo "示例:"
-        echo "  ./run.sh scan              # 完整扫描"
+        echo "  ./run.sh workflow --as-of 2026-08-10 --symbols 000651"
         echo "  ./run.sh stock 000651      # 分析格力电器"
         echo "  ./run.sh show 2            # 查看观察池"
         ;;
@@ -184,22 +185,20 @@ if exist venv\Scripts\activate.bat (
 )
 
 if "%1"=="" goto help
-if "%1"=="scan" goto scan
-if "%1"=="quick" goto quick
+if "%1"=="workflow" goto workflow
+if "%1"=="legacy-scan" goto legacy_scan
 if "%1"=="stock" goto stock
 if "%1"=="show" goto show
 if "%1"=="report" goto report
 if "%1"=="stats" goto stats
 goto help
 
-:scan
-echo 执行全量扫描...
-python main.py scan
+:workflow
+python main.py workflow %2 %3 %4 %5 %6 %7 %8 %9
 goto end
 
-:quick
-echo 执行快速扫描...
-python main.py scan --quick
+:legacy_scan
+python main.py legacy-scan --i-understand-this-uses-legacy-rules %2 %3 %4 %5 %6 %7 %8 %9
 goto end
 
 :stock
@@ -231,8 +230,9 @@ goto end
 echo A股黄金坑股票数据库 - 使用帮助
 echo.
 echo 命令:
-echo   run.bat scan      全量三层扫描
-echo   run.bat quick     快速扫描
+echo   run.bat workflow --as-of YYYY-MM-DD --symbols 000651
+echo   run.bat workflow --run-id RUN_ID
+echo   run.bat legacy-scan  兼容旧算法
 echo   run.bat stock 000651  单股票深度分析
 echo   run.bat show [1^|2^|3]  查看筛选结果
 echo   run.bat report    生成报告
@@ -269,13 +269,13 @@ main() {
     echo "=========================================="
     echo ""
     echo "使用方法:"
-    echo "  ./run.sh scan        # 执行全量扫描"
+    echo "  ./run.sh workflow --as-of 2026-08-10 --symbols 000651"
     echo "  ./run.sh stock 000651  # 分析单只股票"
     echo "  ./run.sh show 3      # 查看核心黄金坑"
     echo "  ./run.sh help        # 查看所有命令"
     echo ""
     echo "或使用 Python 直接运行:"
-    echo "  python main.py scan"
+    echo "  python main.py workflow --as-of 2026-08-10 --symbols 000651"
     echo "  python main.py stock 000651"
     echo ""
 }

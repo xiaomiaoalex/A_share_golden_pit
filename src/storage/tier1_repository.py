@@ -101,15 +101,30 @@ class Tier1Repository:
                 if applied:
                     continue
                 up_path = self.project_root / "scripts" / "migrations" / filename
-                connection.executescript(up_path.read_text(encoding="utf-8"))
-                connection.execute(
-                    """
-                    INSERT OR IGNORE INTO schema_migrations(
-                        version, applied_at, description
-                    ) VALUES (?, ?, ?)
-                    """,
-                    (version, datetime.now().isoformat(), description),
+                escaped = tuple(
+                    value.replace("'", "''")
+                    for value in (version, datetime.now().isoformat(), description)
                 )
+                registration = (
+                    "INSERT INTO schema_migrations(version, applied_at, description) "
+                    f"VALUES ('{escaped[0]}', '{escaped[1]}', '{escaped[2]}');"
+                )
+                self._execute_scripts_atomically(
+                    connection,
+                    [up_path.read_text(encoding="utf-8"), registration],
+                )
+
+    @staticmethod
+    def _execute_scripts_atomically(
+        connection: sqlite3.Connection, scripts: list[str]
+    ) -> None:
+        body = "\n".join(scripts)
+        try:
+            connection.executescript(f"BEGIN IMMEDIATE;\n{body}\nCOMMIT;")
+        except Exception:
+            if connection.in_transaction:
+                connection.rollback()
+            raise
 
     def rollback_stage_a(self) -> None:
         tier3_down = (
@@ -128,23 +143,18 @@ class Tier1Repository:
             self.project_root / "scripts" / "migrations" / "001_tier1_v2_down.sql"
         )
         with self.connect() as connection:
-            connection.executescript(tier3_down.read_text(encoding="utf-8"))
-            connection.executescript(tier2_down.read_text(encoding="utf-8"))
-            connection.executescript(quality_down.read_text(encoding="utf-8"))
-            connection.executescript(down_path.read_text(encoding="utf-8"))
-            if self._table_exists(connection, "schema_migrations"):
-                connection.executemany(
-                    "DELETE FROM schema_migrations WHERE version = ?",
-                    [(version,) for version, _, _ in MIGRATIONS],
-                )
-                connection.execute(
-                    "DELETE FROM schema_migrations WHERE version = ?",
-                    ("003_tier2_human_ai",),
-                )
-                connection.execute(
-                    "DELETE FROM schema_migrations WHERE version = ?",
-                    ("004_tier3_risk_filter",),
-                )
+            self._execute_scripts_atomically(
+                connection,
+                [
+                    tier3_down.read_text(encoding="utf-8"),
+                    tier2_down.read_text(encoding="utf-8"),
+                    quality_down.read_text(encoding="utf-8"),
+                    down_path.read_text(encoding="utf-8"),
+                    "DELETE FROM schema_migrations WHERE version IN "
+                    "('001_tier1_v2','002_tier1_data_quality',"
+                    "'003_tier2_human_ai','004_tier3_risk_filter');",
+                ],
+            )
 
     @staticmethod
     def _table_exists(connection: sqlite3.Connection, name: str) -> bool:

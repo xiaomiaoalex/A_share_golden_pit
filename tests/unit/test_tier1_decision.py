@@ -17,7 +17,7 @@ def decision_input(**overrides):
         selected_pe_ttm=12.0,
         supplier_pe_ttm=12.0,
         self_pe_ttm=12.5,
-        pe_selection_method="VALIDATED_SUPPLIER",
+        pe_selection_method="SUPPLIER_FIELD_CONTRACT_VALIDATED",
         dividend_yield_ttm=0.06,
         dividend_ttm_raw_per_share=0.6,
         dividend_ttm_adjusted_per_share=0.6,

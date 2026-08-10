@@ -1,3 +1,4 @@
+import hashlib
 import json
 from pathlib import Path
 
@@ -33,7 +34,12 @@ def _stage_b_human_pass(tmp_path):
     return run_id, Tier3Repository(tmp_path / "test.db")
 
 
-def _classification(symbol="000001", model="INDUSTRIAL"):
+def _classification(tmp_path, symbol="000001", model="INDUSTRIAL"):
+    snapshot = tmp_path / "risk-evidence.txt"
+    snapshot.write_text(
+        "公司主营业务符合该行业模型定义\n截至筛选日可核查事实\n",
+        encoding="utf-8",
+    )
     return {
         "symbol": symbol,
         "industry_model": model,
@@ -44,8 +50,13 @@ def _classification(symbol="000001", model="INDUSTRIAL"):
                 "title": "年度报告",
                 "publisher": "测试股份",
                 "date": "2026-04-01",
+                "available_at": "2026-04-01T18:00:00+08:00",
                 "url_or_document": "annual-report.pdf",
                 "page_or_section": "主营业务",
+                "snapshot_path": str(snapshot.resolve()),
+                "content_sha256": hashlib.sha256(snapshot.read_bytes()).hexdigest(),
+                "evidence_excerpt": "公司主营业务符合该行业模型定义",
+                "supported_claims": ["公司主营业务符合该行业模型定义"],
             }
         ],
     }
@@ -54,7 +65,7 @@ def _classification(symbol="000001", model="INDUSTRIAL"):
 def _template(tmp_path, model="INDUSTRIAL"):
     run_id, repository = _stage_b_human_pass(tmp_path)
     result = Tier3TemplateExporter(repository, _registry()).export_run(
-        run_id, [_classification(model=model)], tmp_path / "tier3"
+        run_id, [_classification(tmp_path, model=model)], tmp_path / "tier3"
     )
     path = Path(result["templates"][0]["json_path"])
     return run_id, repository, path, json.loads(path.read_text(encoding="utf-8"))
@@ -62,13 +73,18 @@ def _template(tmp_path, model="INDUSTRIAL"):
 
 def _decisive_input(template, *, triggered=None, unknown=None):
     result = json.loads(json.dumps(template, ensure_ascii=False))
-    source = {
-        "title": "风险核查公告",
-        "publisher": "测试股份",
-        "date": "2026-05-01",
-        "url_or_document": "risk-evidence.pdf",
-        "page_or_section": "风险核查",
-    }
+    source = dict(result["industry_classification"]["sources"][0])
+    source.update(
+        {
+            "title": "风险核查公告",
+            "date": "2026-05-01",
+            "available_at": "2026-05-01T18:00:00+08:00",
+            "url_or_document": "risk-evidence.txt",
+            "page_or_section": "风险核查",
+            "evidence_excerpt": "截至筛选日可核查事实",
+            "supported_claims": ["截至筛选日可核查事实"],
+        }
+    )
     for check in result["checks"]:
         if check["check_id"] == unknown:
             continue
@@ -256,6 +272,19 @@ def test_future_source_and_nonfinite_metrics_are_rejected(tmp_path):
     ]
     with pytest.raises(ValueError, match="NaN"):
         _import(repository, tmp_path, nonfinite, "nan.json")
+
+
+def test_stage_c_rejects_tampered_or_unmapped_evidence(tmp_path):
+    _, repository, _, template = _template(tmp_path)
+    tampered = _decisive_input(template)
+    tampered["checks"][0]["sources"][0]["content_sha256"] = "0" * 64
+    with pytest.raises(ValueError, match="SHA-256不一致"):
+        _import(repository, tmp_path, tampered, "tampered.json")
+
+    unmapped = _decisive_input(template)
+    unmapped["checks"][0]["facts"].append("没有来源映射的新事实")
+    with pytest.raises(ValueError, match="未绑定到可验证来源"):
+        _import(repository, tmp_path, unmapped, "unmapped.json")
 
 
 def test_batch_import_is_atomic(tmp_path):

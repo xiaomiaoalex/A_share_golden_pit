@@ -10,6 +10,7 @@ from typing import Any
 
 from jsonschema import Draft202012Validator, FormatChecker
 
+from src.evidence import verify_sources
 from src.storage.tier2_repository import Tier2Repository
 
 from .constants import CRITICAL_DIMENSIONS, DIMENSIONS, SCENARIOS, SCHEMA_VERSION
@@ -80,7 +81,10 @@ class Tier2AssessmentImporter:
 
         # Validate every item before opening the write transaction: one bad item
         # cannot leave a partially imported batch.
-        records = [self._validate_and_prepare(item, index) for index, item in enumerate(assessments)]
+        records = [
+            self._validate_and_prepare(item, index, source.parent)
+            for index, item in enumerate(assessments)
+        ]
         assessment_ids = self.repository.save_assessments_atomic(records)
         return {
             "imported_count": len(assessment_ids),
@@ -90,7 +94,9 @@ class Tier2AssessmentImporter:
             },
         }
 
-    def _validate_and_prepare(self, assessment: Any, index: int) -> dict[str, Any]:
+    def _validate_and_prepare(
+        self, assessment: Any, index: int, source_base_dir: Path
+    ) -> dict[str, Any]:
         if not isinstance(assessment, dict):
             raise TypeError(f"results[{index}]不是JSON对象")
         errors = sorted(self.validator.iter_errors(assessment), key=lambda err: list(err.path))
@@ -121,13 +127,13 @@ class Tier2AssessmentImporter:
                 raise ValueError(
                     f"results[{index}].{dimension['dimension']}事实缺少可追溯来源"
                 )
-            for source in dimension["sources"]:
-                if date.fromisoformat(source["date"]) > date.fromisoformat(
-                    assessment["as_of_date"]
-                ):
-                    raise ValueError(
-                        f"results[{index}].{dimension['dimension']}引用了as-of之后的来源"
-                    )
+            verify_sources(
+                dimension["sources"],
+                as_of=date.fromisoformat(assessment["as_of_date"]),
+                base_dir=source_base_dir,
+                required_claims=dimension["facts"],
+                context=f"results[{index}].{dimension['dimension']}",
+            )
 
         package = self.repository.package(assessment["evidence_package_id"])
         if package is None:

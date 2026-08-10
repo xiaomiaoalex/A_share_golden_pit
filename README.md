@@ -48,8 +48,9 @@ python main.py tier1-migrate --rollback
 
 ## 阶段B：Tier2 SOR3.0人机协作（当前正式入口）
 
-阶段B已经实现逐股证据包、固定AI JSON Schema、证据哈希绑定、结果导入、关键维度
-否决和人工最终复核。默认 `AI_PROVIDER=manual`，不会自动向外部AI发送公司数据。
+阶段B已经实现逐股证据包、固定AI JSON Schema、证据哈希绑定、来源快照哈希/摘录/
+事实映射校验、结果导入、关键维度否决和人工最终复核。默认 `AI_PROVIDER=manual`，
+不会自动向外部AI发送公司数据。
 
 ```bash
 python main.py export-tier2 --run-id RUN_ID
@@ -67,8 +68,9 @@ python main.py review-tier2 --run-id RUN_ID
 ## 阶段C：行业化风险与价值陷阱过滤（当前正式入口）
 
 Stage C只处理最新Stage B人工 `PASS`，并按一般企业、银行、保险、地产四类模型检查
-财务真实性、流动性、分红、治理、周期顶部和结构性价值陷阱。任何硬否决成立即
-`REJECT`；证据缺失或风险警告为 `REVIEW`；系统PASS仍需人工终审。
+财务真实性、流动性、分红、治理、周期顶部和结构性价值陷阱。外部事实必须绑定点时
+可得的本地证据快照并通过哈希和摘录验证。任何硬否决成立即 `REJECT`；证据缺失或
+风险警告为 `REVIEW`；系统PASS仍需人工终审。
 
 ```bash
 python main.py export-tier3 --run-id RUN_ID --classification-file industries.json
@@ -115,8 +117,8 @@ cd golden-pit-db
 chmod +x install.sh
 ./install.sh
 
-# 3. 开始扫描
-./run.sh scan
+# 3. 启动正式工作流（示例：指定股票）
+./run.sh workflow --as-of 2026-08-10 --symbols 000651 600519
 ```
 
 ### 方式二：手动安装
@@ -137,15 +139,15 @@ db = DatabaseManager(settings.DB_PATH)
 db.initialize()
 "
 
-# 4. 运行扫描
-python main.py scan
+# 4. 启动正式工作流
+python main.py workflow --as-of 2026-08-10 --symbols 000651 600519
 ```
 
 ### 方式三：Docker 部署
 
 ```bash
 docker-compose up -d
-docker exec -it golden-pit python main.py scan
+docker exec -it golden-pit python main.py workflow --as-of 2026-08-10 --symbols 000651
 ```
 
 ---
@@ -154,8 +156,9 @@ docker exec -it golden-pit python main.py scan
 
 | 命令 | 说明 | 示例 |
 |------|------|------|
-| `./run.sh scan` | 全量三层扫描 | 完整流程，约10-30分钟 |
-| `./run.sh quick` | 快速扫描 | 仅Tier1雷达池，约2-5分钟 |
+| `./run.sh workflow --as-of DATE ...` | 启动正式工作流 | 执行Stage A并返回后续人工步骤 |
+| `./run.sh workflow --run-id RUN_ID` | 检查正式工作流 | 汇总A/B/C状态和下一步 |
+| `./run.sh legacy-scan` | 兼容旧算法 | 不得作为正式黄金坑数据库结论 |
 | `./run.sh stock 000651` | 单股票深度分析 | 分析格力电器 |
 | `./run.sh show [1\|2\|3]` | 查看筛选结果 | 默认显示Tier3核心池 |
 | `./run.sh report` | 生成报告 | Excel + HTML仪表盘 |
@@ -202,7 +205,7 @@ docker exec -it golden-pit python main.py scan
 
 ### 1. 兼容旧三层筛选体系（非正式重构入口）
 
-以下表格描述的是初始版本，保留用于旧命令兼容；正式入口以本文开头的Stage A/B为准。
+以下表格描述的是初始版本，仅由显式 `legacy-scan` 兼容；正式入口以本文开头的Stage A/B/C和 `workflow` 为准。
 
 | 层级 | 目标 | 关键指标 | 输出数量 |
 |------|------|---------|---------|

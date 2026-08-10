@@ -32,7 +32,7 @@ def test_current_uses_supplier_and_historical_uses_point_in_time_self_pe():
     )
 
     assert current.selected == 12
-    assert current.method == "VALIDATED_SUPPLIER"
+    assert current.method == "SUPPLIER_FIELD_CONTRACT_VALIDATED"
     assert historical.selected == 13
     assert historical.method == "POINT_IN_TIME_SELF_COMPUTED"
     assert current.warnings

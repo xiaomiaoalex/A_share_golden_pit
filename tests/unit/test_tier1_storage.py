@@ -4,8 +4,8 @@ from datetime import date
 import pytest
 
 from config.tier1 import Tier1Config
-from src.storage.tier1_repository import Tier1Repository
 from src.screening.tier1_v2.decision import evaluate_tier1
+from src.storage.tier1_repository import Tier1Repository
 from tests.unit.test_tier1_decision import decision_input
 
 
@@ -133,3 +133,32 @@ def test_source_verification_cannot_bind_to_mismatched_run(tmp_path):
 
     with pytest.raises(ValueError, match="as-of"):
         repository.save_source_verification(report, run_id=run_id)
+
+
+def test_migration_failure_rolls_back_ddl_and_version_registration(tmp_path):
+    repository = Tier1Repository(tmp_path / "atomic.db")
+    fake_root = tmp_path / "fake-project"
+    migration_dir = fake_root / "scripts" / "migrations"
+    migration_dir.mkdir(parents=True)
+    (migration_dir / "999_broken.sql").write_text(
+        """
+        CREATE TABLE schema_migrations(
+            version TEXT PRIMARY KEY,
+            applied_at TEXT NOT NULL,
+            description TEXT NOT NULL
+        );
+        CREATE TABLE must_rollback(id INTEGER PRIMARY KEY);
+        THIS IS NOT VALID SQL;
+        """,
+        encoding="utf-8",
+    )
+    repository.project_root = fake_root
+
+    with pytest.raises(sqlite3.OperationalError):
+        repository._apply_migrations(
+            [("999_broken", "999_broken.sql", "failure injection")]
+        )
+
+    with repository.connect() as connection:
+        assert repository._table_exists(connection, "must_rollback") is False
+        assert repository._table_exists(connection, "schema_migrations") is False

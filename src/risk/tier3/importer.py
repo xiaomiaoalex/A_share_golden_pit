@@ -11,6 +11,7 @@ from typing import Any
 
 from jsonschema import Draft202012Validator, FormatChecker
 
+from src.evidence import verify_sources
 from src.storage.tier3_repository import Tier3Repository
 
 from .engine import RiskAssessmentEngine
@@ -54,7 +55,10 @@ class Tier3RiskImporter:
             raise TypeError("Tier3输入必须是对象、对象数组或含results数组的对象")
         if not inputs:
             raise ValueError("Tier3输入文件为空")
-        records = [self._validate_and_prepare(item, index) for index, item in enumerate(inputs)]
+        records = [
+            self._validate_and_prepare(item, index, Path(path).resolve().parent)
+            for index, item in enumerate(inputs)
+        ]
         ids = self.repository.save_batch(records)
         return {
             "imported_count": len(ids),
@@ -65,7 +69,9 @@ class Tier3RiskImporter:
             },
         }
 
-    def _validate_and_prepare(self, risk_input: Any, index: int) -> dict[str, Any]:
+    def _validate_and_prepare(
+        self, risk_input: Any, index: int, source_base_dir: Path
+    ) -> dict[str, Any]:
         if not isinstance(risk_input, dict):
             raise TypeError(f"results[{index}]不是JSON对象")
         errors = sorted(self.validator.iter_errors(risk_input), key=lambda err: list(err.path))
@@ -77,8 +83,12 @@ class Tier3RiskImporter:
             raise ValueError(f"Tier3输入未通过JSON Schema（results[{index}]）: {detail}")
 
         as_of = date.fromisoformat(risk_input["as_of_date"])
-        self._validate_sources(
-            risk_input["industry_classification"]["sources"], as_of, index, "industry"
+        verify_sources(
+            risk_input["industry_classification"]["sources"],
+            as_of=as_of,
+            base_dir=source_base_dir,
+            required_claims=[risk_input["industry_classification"]["rationale"]],
+            context=f"results[{index}].industry",
         )
         model_code = risk_input["industry_classification"]["industry_model"]
         model = self.registry.get(model_code)
@@ -111,7 +121,13 @@ class Tier3RiskImporter:
                 raise ValueError(
                     f"results[{index}].{rule.rule_id}是该行业模型必要检查，不能标记不适用"
                 )
-            self._validate_sources(item["sources"], as_of, index, rule.rule_id)
+            verify_sources(
+                item["sources"],
+                as_of=as_of,
+                base_dir=source_base_dir,
+                required_claims=item["facts"],
+                context=f"results[{index}].{rule.rule_id}",
+            )
             for metric in item["metrics"]:
                 value = metric["value"]
                 if isinstance(value, float) and not math.isfinite(value):
@@ -141,13 +157,3 @@ class Tier3RiskImporter:
             "risk_input": risk_input,
             "assessment": assessment,
         }
-
-    @staticmethod
-    def _validate_sources(
-        sources: list[dict[str, Any]], as_of: date, index: int, context: str
-    ) -> None:
-        for source in sources:
-            if date.fromisoformat(source["date"]) > as_of:
-                raise ValueError(
-                    f"results[{index}].{context}引用了as-of之后的来源"
-                )

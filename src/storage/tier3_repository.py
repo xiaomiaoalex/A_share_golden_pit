@@ -35,12 +35,16 @@ class Tier3Repository:
             / "004_tier3_risk_filter_down.sql"
         )
         with self.connect() as connection:
-            connection.executescript(down_path.read_text(encoding="utf-8"))
-            if self.tier1._table_exists(connection, "schema_migrations"):
-                connection.execute(
-                    "DELETE FROM schema_migrations WHERE version=?",
-                    ("004_tier3_risk_filter",),
-                )
+            self.tier1._execute_scripts_atomically(
+                connection,
+                [
+                    down_path.read_text(encoding="utf-8"),
+                    (
+                        "DELETE FROM schema_migrations "
+                        "WHERE version='004_tier3_risk_filter';"
+                    ),
+                ],
+            )
 
     def tier2_pass_candidates(
         self, run_id: str, symbols: Iterable[str] | None = None

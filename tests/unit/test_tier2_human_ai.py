@@ -1,11 +1,15 @@
+import hashlib
 import json
 import sqlite3
 import uuid
 from datetime import date
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from config.tier1 import Tier1Config
+from main import _formal_workflow_command
 from src.screening.tier1_v2.decision import evaluate_tier1
 from src.screening.tier2_human_ai import (
     Tier2AssessmentImporter,
@@ -36,15 +40,22 @@ def _export_one(repository: Tier2Repository, tmp_path):
 
 
 def _assessment(package, verdict="PASS"):
+    claim = "可核查事实"
+    snapshot = Path(package["json_path"]).resolve()
     source = {
         "title": "定期报告",
         "publisher": "测试公司",
         "date": "2026-04-01",
+        "available_at": "2026-04-01T18:00:00+08:00",
         "url_or_document": "evidence-package.json",
         "page_or_section": "财务报表",
+        "snapshot_path": str(snapshot),
+        "content_sha256": hashlib.sha256(snapshot.read_bytes()).hexdigest(),
+        "evidence_excerpt": '"screen_status": "PASS"',
+        "supported_claims": [claim],
     }
     return {
-        "schema_version": "tier2-ai-v1.0",
+        "schema_version": "tier2-ai-v1.1",
         "run_id": package["run_id"],
         "symbol": package["symbol"],
         "as_of_date": package["as_of_date"],
@@ -58,10 +69,10 @@ def _assessment(package, verdict="PASS"):
                 "dimension": dimension,
                 "verdict": verdict,
                 "confidence": 0.8,
-                "facts": [] if verdict == "INSUFFICIENT_EVIDENCE" else ["可核查事实"],
+                "facts": [] if verdict == "INSUFFICIENT_EVIDENCE" else [claim],
                 "inferences": [],
                 "counter_evidence": [] if verdict == "INSUFFICIENT_EVIDENCE" else ["待证伪的反方观点"],
-                "sources": [] if verdict == "INSUFFICIENT_EVIDENCE" else [source],
+                "sources": [] if verdict == "INSUFFICIENT_EVIDENCE" else [dict(source)],
                 "reasoning_summary": "证据不足" if verdict == "INSUFFICIENT_EVIDENCE" else "有证据支持",
                 "falsification_conditions": ["指标持续恶化"],
             }
@@ -111,6 +122,19 @@ def test_explicit_non_pass_symbol_is_not_silently_omitted(tmp_path):
         )
 
 
+def test_formal_workflow_reports_the_next_controlled_step(tmp_path, capsys):
+    repository = Tier2Repository(tmp_path / "test.db")
+    run_id = _finished_pass_run(repository)
+
+    _formal_workflow_command(
+        SimpleNamespace(as_of=None, run_id=run_id, db=str(tmp_path / "test.db"))
+    )
+
+    output = json.loads(capsys.readouterr().out)
+    assert output["stage_a"]["pass_count"] == 1
+    assert "export-tier2" in output["next_action"]
+
+
 def test_invalid_ai_schema_is_rejected_without_database_write(tmp_path):
     repository = Tier2Repository(tmp_path / "test.db")
     _, _, package = _export_one(repository, tmp_path)
@@ -149,6 +173,37 @@ def test_ai_source_after_as_of_is_rejected(tmp_path):
     source.write_text(json.dumps(assessment, ensure_ascii=False), encoding="utf-8")
 
     with pytest.raises(ValueError, match="as-of之后"):
+        _importer(repository).import_file(source)
+
+
+def test_ai_source_snapshot_hash_and_excerpt_are_verified(tmp_path):
+    repository = Tier2Repository(tmp_path / "test.db")
+    _, _, package = _export_one(repository, tmp_path)
+
+    bad_hash = _assessment(package)
+    bad_hash["dimensions"][0]["sources"][0]["content_sha256"] = "0" * 64
+    source = tmp_path / "bad-hash.json"
+    source.write_text(json.dumps(bad_hash, ensure_ascii=False), encoding="utf-8")
+    with pytest.raises(ValueError, match="SHA-256不一致"):
+        _importer(repository).import_file(source)
+
+    bad_excerpt = _assessment(package)
+    bad_excerpt["dimensions"][0]["sources"][0]["evidence_excerpt"] = "不存在的摘录"
+    source = tmp_path / "bad-excerpt.json"
+    source.write_text(json.dumps(bad_excerpt, ensure_ascii=False), encoding="utf-8")
+    with pytest.raises(ValueError, match="摘录未在快照文本中找到"):
+        _importer(repository).import_file(source)
+
+
+def test_ai_fact_must_be_bound_to_verified_source(tmp_path):
+    repository = Tier2Repository(tmp_path / "test.db")
+    _, _, package = _export_one(repository, tmp_path)
+    assessment = _assessment(package)
+    assessment["dimensions"][0]["facts"].append("未绑定事实")
+    source = tmp_path / "unbound-fact.json"
+    source.write_text(json.dumps(assessment, ensure_ascii=False), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="未绑定到可验证来源"):
         _importer(repository).import_file(source)
 
 
