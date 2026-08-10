@@ -9,12 +9,11 @@ from pathlib import Path
 from typing import Any
 
 from src.strategies.contracts import StrategyDescriptor, StrategyOperation
-from src.strategies.golden_pit.config import Tier1Config
-from src.strategies.golden_pit.persistence.tier1_repository import Tier1Repository
 from src.strategies.golden_pit.persistence.tier2_repository import Tier2Repository
 from src.strategies.golden_pit.persistence.tier3_repository import Tier3Repository
 
 from .presentation import GoldenPitReadModel
+from .versioning import strategy_release_version
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
@@ -29,7 +28,7 @@ class GoldenPitStrategy:
         name="黄金坑三阶段策略",
         short_name="黄金坑",
         description="低估值、高分红与趋势改善初筛，叠加证据研究和行业化风险终审。",
-        version=Tier1Config().calculation_version,
+        version=strategy_release_version(),
         ui_module="/strategy-assets/golden-pit/app.js",
         ui_template="/strategy-assets/golden-pit/template.html",
         stages=("量化初筛", "证据研究", "风险终审"),
@@ -39,11 +38,10 @@ class GoldenPitStrategy:
 
     def __init__(self, db_path: str | Path):
         self.db_path = str(db_path)
-        Tier1Repository(db_path).migrate_all()
         self.read_model = GoldenPitReadModel(db_path)
 
     def catalog_entry(self) -> dict[str, Any]:
-        overview = self.overview()
+        overview = self.read_model.catalog_snapshot()
         run = overview.get("run")
         summary = overview["summary"]
         return {
@@ -79,10 +77,18 @@ class GoldenPitStrategy:
             ],
         }
 
-    def overview(self, run_id: str | None = None) -> dict[str, Any]:
-        value = self.read_model.overview(run_id)
+    def overview(
+        self, run_id: str | None = None, *, compact: bool = False
+    ) -> dict[str, Any]:
+        value = self.read_model.overview(run_id, compact=compact)
         value["strategy"] = self.descriptor.as_dict()
         return value
+
+    def candidates_page(self, run_id: str, **query: Any) -> dict[str, Any]:
+        return self.read_model.candidates_page(run_id, **query)
+
+    def quality_page(self, run_id: str, **query: Any) -> dict[str, Any]:
+        return self.read_model.quality_page(run_id, **query)
 
     def running_runs(self) -> list[dict[str, Any]]:
         runs = self.read_model.running_runs()
@@ -90,6 +96,17 @@ class GoldenPitStrategy:
             run["strategy_id"] = self.descriptor.strategy_id
             run["strategy_name"] = self.descriptor.short_name
         return runs
+
+    @staticmethod
+    def cli_main(argv: list[str]) -> None:
+        from src.strategies.golden_pit.cli import main as strategy_main
+
+        original = sys.argv
+        try:
+            sys.argv = [original[0], *argv]
+            strategy_main()
+        finally:
+            sys.argv = original
 
     def handle_action(
         self, action: str, body: dict[str, Any]

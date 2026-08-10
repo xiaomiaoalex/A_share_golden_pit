@@ -1,0 +1,9 @@
+# Direct dependency lock used by CI and reproducible research deployments.
+# Regenerate deliberately after provider contract canaries pass.
+akshare==1.18.60
+baostock==0.9.3
+tushare==1.4.29
+pandas==2.3.3
+jsonschema==4.26.0
+pytest==9.0.2
+ruff==0.16.2

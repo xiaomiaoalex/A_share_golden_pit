@@ -87,9 +87,9 @@ python main.py review-tier3 --run-id RUN_ID
 python -m venv venv
 # Linux/macOS: source venv/bin/activate
 # Windows: venv\Scripts\activate
-python -m pip install -r requirements.txt
+python -m pip install -r requirements-lock.txt
 python main.py strategy list
-python main.py strategy golden-pit tier3-migrate
+python main.py migrate
 python deploy_check.py
 ```
 
@@ -119,19 +119,22 @@ python web_app.py
 python web_app.py --db data/db/strategy_platform.db --port 9000 --no-browser
 ```
 
-控制台默认仅监听本机回环地址。筛选和证据包导出在后台执行，可在“运行记录”查看
-状态；AI研究 JSON 和行业分类等正式材料仍通过对应 CLI 导入，以保留既有的严格校验
-和证据契约。
+控制台默认仅监听本机回环地址。部署或升级时先显式执行 `python main.py migrate`；
+策略模块构造和只读 API 不再隐式修改数据库。筛选和证据包导出由持久化、单并发的
+本地任务队列执行，可在“运行记录”查看排队、运行和中断状态；AI研究 JSON 和行业
+分类等正式材料仍通过对应 CLI 导入，以保留既有的严格校验和证据契约。
 
-平台通过策略注册表隔离数据、策略、执行和展示层。新增策略只需实现稳定策略契约、
-在组合根注册并提供独立前端模块，不需要修改通用 HTTP 路由或后台任务执行器。架构
-和接入说明见 [多策略选股架构](docs/strategy_architecture.md)。
+平台通过策略注册表隔离数据、策略、执行和展示层。新增策略可内置注册，也可发布
+`a_share_strategy_platform.strategies` Python entry point，由平台启动时自动发现；只需
+实现稳定策略契约并提供独立前端模块，不需要修改通用 HTTP 路由或后台任务执行器。
+架构和接入说明见 [多策略选股架构](docs/strategy_architecture.md)。
 
 ### 断点续跑与数据缺口补跑
 
 量化初筛在开始逐股处理前会固化有序股票池及 SHA-256，随后为每只股票保存
 `PENDING / PROCESSING / COMPLETED / RETRYABLE_FAILED` 状态和追加式尝试记录。
-工作进程通过短期租约和心跳防止同一运行被并发处理：
+工作进程通过短期租约和独立心跳线程防止同一运行被并发处理；即使单只股票的数据源
+调用超过租约周期，也会持续续租：
 
 ```bash
 # 仅处理没有完整结束或尚未产生决策的标的
@@ -155,8 +158,10 @@ Web 控制台会在运行停止且租约过期后显示“从断点继续”；�
 | BaoStock | 沪深历史行情、PE、每日ST、分红和送转 | 不用于近似季度财务趋势 |
 | SQLite | 运行、原始观察、血缘、质量、评估和人工复核 | 追加式版本迁移 |
 
-默认顺序由 `GOLDEN_PIT_DATA_SOURCES=akshare,tushare,baostock` 控制；旧变量
-`TIER1_DATA_SOURCES` 仍作为兼容别名。当前筛选可采用通过
+配置顺序由 `GOLDEN_PIT_DATA_SOURCES=akshare,tushare,baostock` 控制，同一字段会先
+尝试能力登记为 `EXACT` 的来源，再按配置顺序回退；分红和风险警示只有 `LIMITED`
+覆盖时不能形成硬条件通过。连续失败的数据源会短时熔断，避免全市场任务持续冲击
+异常接口。旧变量 `TIER1_DATA_SOURCES` 仍作为兼容别名。当前筛选可采用通过
 字段契约验证的供应商PE；历史回扫采用点时自计算并同时保存供应商值和自计算值。
 
 ## 正式CLI
@@ -195,7 +200,7 @@ tests/                          离线业务测试和实时数据canary
 
 ```bash
 python -m pytest -q
-python -m ruff check --select F,I main.py deploy_check.py src tests
+python -m ruff check --select F,I main.py web_app.py deploy_check.py src tests
 python deploy_check.py
 ```
 

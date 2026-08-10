@@ -312,11 +312,21 @@ def assess_envelope(
             )
         )
     elif capability == CapabilityLevel.LIMITED and semantic_data:
+        hard_condition = field_group in {
+            "dividend_and_actions",
+            "risk_warning_status",
+        }
         issues.append(
             _issue(
                 "LIMITED_SOURCE_CAPABILITY",
-                QualitySeverity.LOW,
-                f"{envelope.provider}对{field_group}仅具有限定覆盖",
+                QualitySeverity.HIGH if hard_condition else QualitySeverity.LOW,
+                (
+                    f"{envelope.provider}对{field_group}仅具有限定覆盖，"
+                    "不能据此判定硬条件通过"
+                    if hard_condition
+                    else f"{envelope.provider}对{field_group}仅具有限定覆盖"
+                ),
+                blocking=hard_condition,
             )
         )
     elif capability == CapabilityLevel.UNKNOWN and semantic_data:

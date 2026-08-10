@@ -1,6 +1,11 @@
 from datetime import date, datetime
 
-from src.data.point_in_time.contracts import DataEnvelope, FetchStatus, UniverseItem
+from src.data.point_in_time.contracts import (
+    DataEnvelope,
+    DividendBundle,
+    FetchStatus,
+    UniverseItem,
+)
 from src.data.quality import VerificationStatus, assess_envelope, gate_envelope
 from src.screening.tier1_v2.contracts import FinancialReportFact, MarketSnapshot
 
@@ -63,3 +68,17 @@ def test_valid_unknown_source_remains_operational_but_single_source():
 
     assert assessment.blocking is False
     assert assessment.verification_status == VerificationStatus.SINGLE_SOURCE
+
+
+def test_limited_dividend_source_cannot_satisfy_hard_condition():
+    raw = envelope(DividendBundle((), ()), provider="AKShare")
+
+    assessment = assess_envelope(
+        "dividend_and_actions", raw, date(2026, 8, 10)
+    )
+
+    assert assessment.blocking is True
+    assert any(
+        issue.code == "LIMITED_SOURCE_CAPABILITY" and issue.blocking
+        for issue in assessment.issues
+    )

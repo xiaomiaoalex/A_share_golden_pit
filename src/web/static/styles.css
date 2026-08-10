@@ -441,3 +441,8 @@ tbody tr:hover { background: #fbfcfb; }
   .drawer-body { padding-inline: 17px; }
   .drawer-header, .drawer-footer { padding-inline: 19px; }
 }
+.candidate-pagination{display:flex;align-items:center;justify-content:flex-end;gap:12px;padding:18px 22px;border-top:1px solid var(--line)}
+.candidate-pagination button{border:1px solid var(--line);background:#fff;color:var(--ink);border-radius:9px;padding:8px 14px;cursor:pointer;font:inherit}
+.candidate-pagination button:hover:not(:disabled){border-color:var(--green-700);color:var(--green-700)}
+.candidate-pagination button:disabled{opacity:.4;cursor:not-allowed}
+.candidate-pagination span{font-size:13px;color:var(--muted)}

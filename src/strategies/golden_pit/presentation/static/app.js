@@ -5,6 +5,9 @@ const state = {
   query: '',
   selected: null,
   jobsTimer: null,
+  searchTimer: null,
+  overviewPollTick: 0,
+  candidatePage: { page: 1, pageSize: 100, total: 0, pages: 1, facets: {stage_b: [], stage_c: []} },
   filters: { stageA: 'ALL', data: 'ALL', pe: 'ALL', dividend: 'ALL', stageB: 'ALL', stageC: 'ALL' },
   sort: { key: null, direction: 'asc' }
 };
@@ -16,7 +19,7 @@ const statusLabels = {
   PASS: '通过', FAIL: '未通过', REVIEW: '待复核', REJECT: '否决',
   COMPLETE: '数据完整', PARTIAL: '部分数据', ERROR: '数据异常', PENDING_DATA: '数据待补', DATA_ERROR: '数据异常',
   FINISHED: '已完成', FINISHED_WITH_ERRORS: '完成但有异常', RUNNING: '运行中',
-  INTERRUPTED: '已中断',
+  INTERRUPTED: '已中断', QUEUED: '排队中',
   SUCCEEDED: '已完成', FAILED: '失败', '未进入': '未进入',
   '待生成证据包': '待生成证据包', '待AI研究': '待 AI 研究', '待人工复核': '待人工复核', '待风险研究': '待风险研究'
 };
@@ -37,13 +40,21 @@ function bindEvents() {
   $('#workflowForm').addEventListener('submit', startWorkflow);
   $$('[name="scope"]').forEach(input => input.addEventListener('change', updateWorkflowScope));
   $('#reviewForm').addEventListener('submit', submitReview);
-  $('#candidateSearch').addEventListener('input', e => { state.query = e.target.value.trim().toLowerCase(); renderCandidateTable(); });
+  $('#candidateSearch').addEventListener('input', e => {
+    state.query = e.target.value.trim().toLowerCase();
+    state.candidatePage.page = 1;
+    clearTimeout(state.searchTimer);
+    state.searchTimer = setTimeout(() => loadCandidates(), 250);
+  });
   $$('[data-filter-key]').forEach(select => select.addEventListener('change', () => {
     state.filters[select.dataset.filterKey] = select.value;
-    renderCandidateTable();
+    state.candidatePage.page = 1;
+    loadCandidates();
   }));
   $$('[data-sort]').forEach(button => button.addEventListener('click', () => toggleCandidateSort(button.dataset.sort)));
   $('#resetFilters').addEventListener('click', resetCandidateFilters);
+  $('#candidatePrev').addEventListener('click', () => changeCandidatePage(-1));
+  $('#candidateNext').addEventListener('click', () => changeCandidatePage(1));
   $('#closeDrawer').addEventListener('click', closeDrawer);
   $('#scrim').addEventListener('click', closeDrawer);
   $('#nextActionButton').addEventListener('click', nextAction);
@@ -61,11 +72,17 @@ function bindEvents() {
 async function loadOverview(runId = '') {
   setLoading(true);
   try {
-    const query = runId ? `?run_id=${encodeURIComponent(runId)}` : '';
+    const params = new URLSearchParams({compact:'1'});
+    if (runId) params.set('run_id', runId);
+    const query = `?${params.toString()}`;
     const response = await fetch(`/api/strategies/golden-pit/overview${query}`);
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || '载入失败');
     state.data = data;
+    if (data.run) {
+      state.candidatePage.page = 1;
+      await Promise.all([loadCandidates(false), loadQuality(false)]);
+    }
     renderAll();
   } catch (error) { toast('数据载入失败', error.message, true); }
   finally { setLoading(false); }
@@ -78,7 +95,7 @@ function renderAll() {
   $('#overviewSubtitle').textContent = run ? `${run.calculation_version} · ${formatTime(run.finished_at || run.started_at)} 更新` : '尚未创建正式工作流';
   $('#asOfDate').textContent = run?.as_of_date || '—';
   $('#sourceText').textContent = d.quality.providers.length ? `${d.quality.providers.join(' · ')} · ${d.quality.gate_passed ? '质量闸门通过' : '存在阻断'}` : '等待首次运行';
-  $('#candidateNavCount').textContent = d.candidates.length;
+  $('#candidateNavCount').textContent = d.candidate_total ?? state.candidatePage.total;
   $('#kpiUniverse').textContent = fmt.format(d.summary.universe || 0);
   $('#kpiStageA').textContent = fmt.format(d.summary.stage_a_pass || 0);
   $('#kpiReview').textContent = fmt.format(d.summary.pending_review || 0);
@@ -125,50 +142,13 @@ function renderOverviewCandidates() {
 }
 
 function filteredCandidates() {
-  const matchesRange = (value, filter, type) => {
-    const numeric = Number(value);
-    const present = value !== null && value !== undefined && value !== '' && Number.isFinite(numeric);
-    if (filter === 'ALL') return true;
-    if (filter === 'MISSING') return !present;
-    if (!present) return false;
-    if (type === 'pe') {
-      if (filter === 'LT15') return numeric < 15;
-      if (filter === '15TO30') return numeric >= 15 && numeric < 30;
-      if (filter === 'GTE30') return numeric >= 30;
-    }
-    if (filter === 'GT5') return numeric > .05;
-    if (filter === '2TO5') return numeric >= .02 && numeric <= .05;
-    if (filter === 'LT2') return numeric < .02;
-    return true;
-  };
-  const rows = state.data.candidates.filter(c => {
-    const symbol = String(c.symbol || '').toLowerCase();
-    const company = String(c.stock_name || '').toLowerCase();
-    return (!state.query || symbol.includes(state.query) || company.includes(state.query))
-      && (state.filters.stageA === 'ALL' || c.screen_status === state.filters.stageA)
-      && (state.filters.data === 'ALL' || c.data_status === state.filters.data)
-      && matchesRange(c.pe_ttm, state.filters.pe, 'pe')
-      && matchesRange(c.dividend_yield, state.filters.dividend, 'dividend')
-      && (state.filters.stageB === 'ALL' || c.stage_b_status === state.filters.stageB)
-      && (state.filters.stageC === 'ALL' || c.stage_c_status === state.filters.stageC);
-  });
-  if (!state.sort.key) return rows;
-  return rows.sort((left, right) => {
-    const leftValue = Number(left[state.sort.key]);
-    const rightValue = Number(right[state.sort.key]);
-    const leftPresent = left[state.sort.key] !== null && left[state.sort.key] !== undefined && left[state.sort.key] !== '' && Number.isFinite(leftValue);
-    const rightPresent = right[state.sort.key] !== null && right[state.sort.key] !== undefined && right[state.sort.key] !== '' && Number.isFinite(rightValue);
-    if (leftPresent !== rightPresent) return leftPresent ? -1 : 1;
-    if (!leftPresent) return String(left.symbol || '').localeCompare(String(right.symbol || ''));
-    const difference = state.sort.direction === 'asc' ? leftValue - rightValue : rightValue - leftValue;
-    return difference || String(left.symbol || '').localeCompare(String(right.symbol || ''));
-  });
+  return state.data.candidates || [];
 }
 
 function renderCandidateTable() {
   if (!state.data) return;
   const rows = filteredCandidates();
-  $('#candidateCount').textContent = `${rows.length} 条结果`;
+  $('#candidateCount').textContent = `${state.candidatePage.total} 条结果`;
   const activeCount = Number(Boolean(state.query)) + Object.values(state.filters).filter(value => value !== 'ALL').length;
   $('#activeFilterCount').textContent = `${activeCount} 项筛选`;
   $('#activeFilterCount').classList.toggle('hidden', activeCount === 0);
@@ -181,12 +161,14 @@ function renderCandidateTable() {
   });
   $('#allCandidates').innerHTML = rows.map(c => `<tr><td>${companyCell(c)}</td><td>${badge(c.screen_status)}</td><td>${badge(c.data_status)}</td><td class="metric">${number(c.pe_ttm, '×')}</td><td class="metric ${c.dividend_yield >= .05 ? 'positive' : ''}">${percent(c.dividend_yield)}</td><td>${badge(c.stage_b_status)}</td><td>${badge(c.stage_c_status)}</td><td><button class="row-action" data-detail="${c.symbol}"><svg viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></svg></button></td></tr>`).join('');
   $('#candidateEmpty').classList.toggle('hidden', rows.length > 0);
+  renderCandidatePagination();
 }
 
 function populateStageFilters() {
   const populate = (selector, key, field) => {
     const select = $(selector);
-    const values = [...new Set(state.data.candidates.map(candidate => candidate[field]).filter(Boolean))].sort();
+    const facetKey = field === 'stage_b_status' ? 'stage_b' : 'stage_c';
+    const values = state.candidatePage.facets?.[facetKey] || [];
     if (!values.includes(state.filters[key])) state.filters[key] = 'ALL';
     select.innerHTML = `<option value="ALL">全部状态</option>${values.map(value => `<option value="${esc(value)}">${esc(statusLabels[value] || value)}</option>`).join('')}`;
     select.value = state.filters[key];
@@ -198,7 +180,8 @@ function populateStageFilters() {
 function toggleCandidateSort(key) {
   if (state.sort.key === key) state.sort.direction = state.sort.direction === 'asc' ? 'desc' : 'asc';
   else state.sort = { key, direction: 'asc' };
-  renderCandidateTable();
+  state.candidatePage.page = 1;
+  loadCandidates();
 }
 
 function resetCandidateFilters() {
@@ -207,7 +190,53 @@ function resetCandidateFilters() {
   state.sort = { key: null, direction: 'asc' };
   $('#candidateSearch').value = '';
   $$('[data-filter-key]').forEach(select => { select.value = 'ALL'; });
-  renderCandidateTable();
+  state.candidatePage.page = 1;
+  loadCandidates();
+}
+
+async function loadCandidates(render=true) {
+  if (!state.data?.run) return;
+  const params = new URLSearchParams({
+    run_id: state.data.run.run_id,
+    page: String(state.candidatePage.page),
+    page_size: String(state.candidatePage.pageSize),
+    q: state.query,
+    ...state.filters
+  });
+  if (state.sort.key) {
+    params.set('sort', state.sort.key);
+    params.set('direction', state.sort.direction);
+  }
+  const response = await fetch(`/api/strategies/golden-pit/candidates?${params}`);
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || '候选列表载入失败');
+  state.data.candidates = data.items;
+  state.data.candidate_total = data.summary?.total ?? data.total;
+  state.candidatePage = {page:data.page, pageSize:data.page_size, total:data.total, pages:data.pages, facets:data.facets};
+  if (render) { populateStageFilters(); renderOverviewCandidates(); renderCandidateTable(); }
+}
+
+async function loadQuality(render=true) {
+  if (!state.data?.run) return;
+  const params = new URLSearchParams({run_id:state.data.run.run_id, page:'1', page_size:'200'});
+  const response = await fetch(`/api/strategies/golden-pit/quality?${params}`);
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || '质量记录载入失败');
+  state.data.quality = data;
+  if (render) renderQuality();
+}
+
+function changeCandidatePage(delta) {
+  const target = Math.max(1, Math.min(state.candidatePage.pages, state.candidatePage.page + delta));
+  if (target === state.candidatePage.page) return;
+  state.candidatePage.page = target;
+  loadCandidates();
+}
+
+function renderCandidatePagination() {
+  $('#candidatePageInfo').textContent = `第 ${state.candidatePage.page} / ${state.candidatePage.pages} 页`;
+  $('#candidatePrev').disabled = state.candidatePage.page <= 1;
+  $('#candidateNext').disabled = state.candidatePage.page >= state.candidatePage.pages;
 }
 
 function renderQuality() {
@@ -215,7 +244,7 @@ function renderQuality() {
   const gate = $('#qualityGate');
   $('strong', gate).textContent = q.gate_passed === null ? '尚未评估' : q.gate_passed ? '允许继续' : '已阻断';
   $('.health-dot', gate).style.background = q.gate_passed === false ? '#b8584f' : '#5cc59b';
-  $('#qualitySummary').innerHTML = `<div class="quality-stat"><span>评估项</span><strong>${q.items.length}</strong></div><div class="quality-stat"><span>非阻断警告</span><strong>${q.warning_count}</strong></div><div class="quality-stat"><span>阻断问题</span><strong>${q.blocking_count}</strong></div>`;
+  $('#qualitySummary').innerHTML = `<div class="quality-stat"><span>评估项</span><strong>${q.total ?? q.items.length}</strong></div><div class="quality-stat"><span>非阻断警告</span><strong>${q.warning_count}</strong></div><div class="quality-stat"><span>阻断问题</span><strong>${q.blocking_count}</strong></div>`;
   $('#qualityList').innerHTML = q.items.map(item => `<div class="quality-item"><div class="provider"><strong>${esc(item.provider)}</strong><span>${esc(groupLabel(item.field_group))}</span></div><span class="symbol-field">${esc(item.symbol || '全局股票池')}</span><span class="capability">${esc(item.capability)}</span><span class="issue" title="${esc(issueText(item))}">${esc(issueText(item))}</span>${badge(item.blocking ? 'ERROR' : item.severity)}</div>`).join('');
   $('#qualityEmpty').classList.toggle('hidden', q.items.length > 0);
 }
@@ -363,13 +392,17 @@ async function loadJobs() {
     $('#jobsPanel').classList.toggle('hidden', !jobs.length);
     $('#jobList').innerHTML = jobs.map(job => `<div class="job-row"><strong>${esc(job.label)}</strong>${badge(job.status)}${job.status === 'RUNNING' ? progressMarkup(job.progress, true) : ''}${job.output ? `<p>${esc(job.output)}</p>` : (job.status === 'RUNNING' ? '<p class="job-hint">正在持续写入正式筛选结果，进度每 4 秒更新。</p>' : '')}</div>`).join('');
     clearTimeout(state.jobsTimer);
-    if (jobs.some(job => job.status === 'RUNNING')) state.jobsTimer = setTimeout(async () => { await loadJobs(); await loadOverview(state.data?.run?.run_id || ''); }, 4000);
+    if (jobs.some(job => ['QUEUED','RUNNING'].includes(job.status))) state.jobsTimer = setTimeout(async () => {
+      state.overviewPollTick += 1;
+      await loadJobs();
+      if (state.overviewPollTick % 3 === 0) await loadOverview(state.data?.run?.run_id || '');
+    }, 4000);
   } catch (_) { /* non-critical background status */ }
 }
 
 function nextAction() {
   const action = state.data.next_action;
-  if (action.key === 'export-tier2') exportTier2(state.data.candidates.filter(c => c.stage_b_status === '待生成证据包').map(c => c.symbol));
+  if (action.key === 'export-tier2') exportTier2([]);
   else if (action.key === 'resume-tier1') startRecovery('resume', state.data.run.run_id);
   else if (action.key === 'retry-tier1-data') startRecovery('data', state.data.run.run_id);
   else navigate('candidates');
@@ -384,7 +417,7 @@ function navigate(page) {
 }
 
 function companyCell(c) { return `<div class="company"><span class="company-mark">${esc(c.stock_name.slice(0,1))}</span><div><strong>${esc(c.stock_name)}</strong><span>${esc(c.symbol)}</span></div></div>`; }
-function badge(status) { const raw = String(status ?? '—'); const cls = ['PASS','FAIL','REJECT','ERROR','COMPLETE','FINISHED','FINISHED_WITH_ERRORS','REVIEW','PENDING_DATA','DATA_ERROR','RUNNING','SUCCEEDED','FAILED'].includes(raw) ? raw : (raw.startsWith('待') ? 'pending' : 'neutral'); return `<span class="badge ${cls}">${esc(statusLabels[raw] || raw)}</span>`; }
+function badge(status) { const raw = String(status ?? '—'); const cls = ['PASS','FAIL','REJECT','ERROR','COMPLETE','FINISHED','FINISHED_WITH_ERRORS','REVIEW','PENDING_DATA','DATA_ERROR','QUEUED','RUNNING','SUCCEEDED','FAILED','INTERRUPTED'].includes(raw) ? raw : (raw.startsWith('待') ? 'pending' : 'neutral'); return `<span class="badge ${cls}">${esc(statusLabels[raw] || raw)}</span>`; }
 function number(value, suffix='') { return value == null ? '—' : `${fmt.format(value)}${suffix}`; }
 function percent(value) { return value == null ? '—' : `${fmt.format(value * 100)}%`; }
 function sequence(values) { return values?.length ? values.map(v => `${fmt.format(v*100)}%`).join(' → ') : '—'; }

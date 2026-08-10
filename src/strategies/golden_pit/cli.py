@@ -258,8 +258,8 @@ def _load_universe_file(path: str):
 
 def _run_tier1_command(args) -> dict:
     from src.data.point_in_time.provider_factory import build_point_in_time_provider
-    from src.strategies.golden_pit.quantitative_screening.pipeline import Tier1Pipeline
     from src.strategies.golden_pit.persistence.tier1_repository import Tier1Repository
+    from src.strategies.golden_pit.quantitative_screening.pipeline import Tier1Pipeline
 
     as_of_date = _parse_as_of(args.as_of)
     repository = Tier1Repository(args.db)
@@ -300,10 +300,10 @@ def _run_tier1_command(args) -> dict:
 
 
 def _resume_tier1_command(args, *, mode: str) -> dict:
-    from src.strategies.golden_pit.config import Tier1Config
     from src.data.point_in_time.provider_factory import build_point_in_time_provider
-    from src.strategies.golden_pit.quantitative_screening.pipeline import Tier1Pipeline
+    from src.strategies.golden_pit.config import Tier1Config
     from src.strategies.golden_pit.persistence.tier1_repository import Tier1Repository
+    from src.strategies.golden_pit.quantitative_screening.pipeline import Tier1Pipeline
 
     repository = Tier1Repository(args.db)
     repository.migrate()
@@ -458,10 +458,12 @@ def _show_tier1_command(args) -> None:
 
 
 def _verify_tier1_sources_command(args) -> None:
-    from src.strategies.golden_pit.config import Tier1Config
     from src.data.point_in_time.provider_factory import build_point_in_time_provider
-    from src.strategies.golden_pit.quantitative_screening.source_reconciliation import verify_symbol_sources
+    from src.strategies.golden_pit.config import Tier1Config
     from src.strategies.golden_pit.persistence.tier1_repository import Tier1Repository
+    from src.strategies.golden_pit.quantitative_screening.source_reconciliation import (
+        verify_symbol_sources,
+    )
 
     as_of_date = _parse_as_of(args.as_of)
     config = Tier1Config()
@@ -641,9 +643,12 @@ def _migrate_tier2_command(args) -> None:
 
 
 def _export_tier3_command(args) -> None:
-    from src.strategies.golden_pit.risk_review.models import RiskModelRegistry
-    from src.strategies.golden_pit.risk_review.template import Tier3TemplateExporter, load_classifications
     from src.strategies.golden_pit.persistence.tier3_repository import Tier3Repository
+    from src.strategies.golden_pit.risk_review.models import RiskModelRegistry
+    from src.strategies.golden_pit.risk_review.template import (
+        Tier3TemplateExporter,
+        load_classifications,
+    )
 
     registry = RiskModelRegistry(RISK_RULES)
     output_dir = Path(args.output_dir) if args.output_dir else settings.OUTPUT_DIR / 'tier3' / args.run_id
@@ -661,8 +666,11 @@ def _export_tier3_command(args) -> None:
 
 
 def _import_tier3_command(args) -> None:
-    from src.strategies.golden_pit.risk_review import RiskModelRegistry, Tier3RiskImporter
     from src.strategies.golden_pit.persistence.tier3_repository import Tier3Repository
+    from src.strategies.golden_pit.risk_review import (
+        RiskModelRegistry,
+        Tier3RiskImporter,
+    )
 
     registry = RiskModelRegistry(RISK_RULES)
     importer = Tier3RiskImporter(

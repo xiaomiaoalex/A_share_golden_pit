@@ -25,7 +25,8 @@ def build_handler(
     jobs: JobRegistry | None = None,
     strategies: StrategyRegistry | None = None,
 ):
-    registry = jobs or JobRegistry()
+    job_db_path = Path(db_path).with_name(f"{Path(db_path).stem}.jobs.db")
+    registry = jobs or JobRegistry(job_db_path)
     strategy_registry = strategies or build_strategy_registry(db_path)
 
     class ConsoleHandler(BaseHTTPRequestHandler):
@@ -48,11 +49,59 @@ def build_handler(
                     and parts[:2] == ["api", "strategies"]
                     and parts[3] == "overview"
                 ):
-                    run_id = parse_qs(parsed.query).get("run_id", [None])[0]
-                    self._json(
-                        HTTPStatus.OK,
-                        strategy_registry.get(parts[2]).overview(run_id),
+                    query = parse_qs(parsed.query)
+                    run_id = query.get("run_id", [None])[0]
+                    compact = query.get("compact", ["0"])[0] == "1"
+                    module = strategy_registry.get(parts[2])
+                    value = (
+                        module.overview(run_id, compact=True)
+                        if compact
+                        else module.overview(run_id)
                     )
+                    self._json(HTTPStatus.OK, value)
+                    return
+                if (
+                    len(parts) == 4
+                    and parts[:2] == ["api", "strategies"]
+                    and parts[3] in {"candidates", "quality"}
+                ):
+                    query = parse_qs(parsed.query)
+                    run_id = query.get("run_id", [""])[0]
+                    if not run_id:
+                        raise ValueError("缺少 run_id")
+                    page = self._bounded_int(query, "page", 1, 1, 1_000_000)
+                    if parts[3] == "candidates":
+                        page_size = self._bounded_int(
+                            query, "page_size", 100, 1, 500
+                        )
+                        filters = {
+                            key: query.get(key, ["ALL"])[0]
+                            for key in (
+                                "stageA",
+                                "data",
+                                "pe",
+                                "dividend",
+                                "stageB",
+                                "stageC",
+                            )
+                        }
+                        value = strategy_registry.get(parts[2]).candidates_page(
+                            run_id,
+                            page=page,
+                            page_size=page_size,
+                            query=query.get("q", [""])[0],
+                            filters=filters,
+                            sort_key=query.get("sort", [None])[0],
+                            sort_direction=query.get("direction", ["asc"])[0],
+                        )
+                    else:
+                        page_size = self._bounded_int(
+                            query, "page_size", 200, 1, 500
+                        )
+                        value = strategy_registry.get(parts[2]).quality_page(
+                            run_id, page=page, page_size=page_size
+                        )
+                    self._json(HTTPStatus.OK, value)
                     return
                 if parsed.path == "/api/overview":
                     run_id = parse_qs(parsed.query).get("run_id", [None])[0]
@@ -135,6 +184,20 @@ def build_handler(
             if not isinstance(value, dict):
                 raise ValueError("请求体必须是 JSON 对象")
             return value
+
+        @staticmethod
+        def _bounded_int(
+            query: dict[str, list[str]],
+            key: str,
+            default: int,
+            minimum: int,
+            maximum: int,
+        ) -> int:
+            try:
+                value = int(query.get(key, [str(default)])[0])
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"{key} 必须为整数") from exc
+            return max(minimum, min(maximum, value))
 
         def _static(self, path: str) -> None:
             if path.startswith("/strategy-assets/"):

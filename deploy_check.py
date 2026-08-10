@@ -59,6 +59,7 @@ def check_database() -> None:
         "004_tier3_risk_filter",
         "005_tier1_resume",
         "006_strategy_identity",
+        "golden-pit:007_execution_integrity",
     }
     if not expected.issubset(versions):
         raise RuntimeError(f"数据库迁移不完整: {sorted(expected - versions)}")

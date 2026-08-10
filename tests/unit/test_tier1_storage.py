@@ -1,3 +1,4 @@
+import json
 import sqlite3
 from datetime import date, datetime, timedelta
 
@@ -59,6 +60,51 @@ def test_same_symbol_and_as_of_can_coexist_in_different_runs(tmp_path):
     assert len(repository.decisions(run1)) == 1
     assert len(repository.decisions(run2)) == 1
     assert run1 != run2
+
+
+def test_retries_append_decision_history_and_refresh_current_snapshot(tmp_path):
+    repository = Tier1Repository(tmp_path / "history.db")
+    run_id = repository.begin_run(date(2026, 8, 10), Tier1Config())
+    decision = evaluate_tier1(decision_input())
+
+    first_id = repository.save_decision(run_id, decision)
+    decision.screen_status = "REVIEW"
+    second_id = repository.save_decision(run_id, decision)
+
+    with repository.connect() as connection:
+        history = connection.execute(
+            """
+            SELECT decision_id, decision_version FROM tier1_decision_history
+            WHERE run_id=? ORDER BY decision_version
+            """,
+            (run_id,),
+        ).fetchall()
+        current = connection.execute(
+            """
+            SELECT decision_id, decision_version, screen_status
+            FROM tier1_decisions WHERE run_id=?
+            """,
+            (run_id,),
+        ).fetchone()
+
+    assert [(row["decision_id"], row["decision_version"]) for row in history] == [
+        (first_id, 1),
+        (second_id, 2),
+    ]
+    assert current["decision_id"] == second_id
+    assert current["decision_version"] == 2
+    assert current["screen_status"] == "REVIEW"
+
+
+def test_new_run_records_reproducible_release_manifest(tmp_path):
+    repository = Tier1Repository(tmp_path / "manifest.db")
+    run_id = repository.begin_run(date(2026, 8, 10), Tier1Config())
+
+    manifest = json.loads(repository.run_record(run_id)["release_manifest_json"])
+
+    assert manifest["strategy_id"] == "golden-pit"
+    assert len(manifest["strategy_fingerprint"]) == 64
+    assert manifest["dependencies"]["pandas"]
 
 
 def test_decisions_after_rollback_returns_empty_instead_of_crashing(tmp_path):
@@ -157,6 +203,7 @@ def test_existing_stage_a_database_upgrades_to_quality_migration(tmp_path):
         "002_tier1_data_quality",
         "005_tier1_resume",
         "006_strategy_identity",
+        "golden-pit:007_execution_integrity",
     }
 
 

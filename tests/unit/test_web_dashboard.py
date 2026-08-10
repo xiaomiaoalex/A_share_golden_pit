@@ -95,6 +95,35 @@ def test_running_dashboard_surfaces_source_degradation(tmp_path):
     assert health["last_error"]["symbol"] == "000001"
 
 
+def test_candidate_read_model_filters_sorts_and_paginates_server_side(tmp_path):
+    db_path = tmp_path / "pagination.db"
+    repository = Tier1Repository(db_path)
+    repository.migrate_all()
+    run_id = repository.begin_run(date(2026, 8, 10), Tier1Config())
+    for index in range(125):
+        decision = evaluate_tier1(decision_input())
+        decision.symbol = f"{index:06d}"
+        decision.stock_name = f"测试公司{index:03d}"
+        decision.selected_pe_ttm = float(index)
+        repository.save_decision(run_id, decision)
+
+    page = DashboardService(db_path).candidates_page(
+        run_id,
+        page=2,
+        page_size=20,
+        query="测试公司",
+        filters={"pe": "GTE30"},
+        sort_key="pe_ttm",
+        sort_direction="desc",
+    )
+
+    assert page["total"] == 95
+    assert page["pages"] == 5
+    assert len(page["items"]) == 20
+    assert page["items"][0]["pe_ttm"] == 104.0
+    assert page["items"][-1]["pe_ttm"] == 85.0
+
+
 def test_market_workflow_starts_without_explicit_symbols(tmp_path):
     class RecordingJobs:
         def __init__(self):

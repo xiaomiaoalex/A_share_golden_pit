@@ -48,11 +48,19 @@ def test_removed_legacy_commands_are_unrecognized(command):
 
 def test_platform_strategy_namespace_routes_to_golden_pit(monkeypatch):
     captured = []
-    monkeypatch.setattr(
-        platform_cli,
-        "golden_pit_main",
-        lambda: captured.append(list(platform_cli.sys.argv)),
-    )
+
+    class Module:
+        @staticmethod
+        def cli_main(argv):
+            captured.append(list(argv))
+
+    class Registry:
+        @staticmethod
+        def get(strategy_id):
+            assert strategy_id == "golden-pit"
+            return Module()
+
+    monkeypatch.setattr(platform_cli, "build_strategy_registry", lambda db: Registry())
     monkeypatch.setattr(
         platform_cli.sys,
         "argv",
@@ -61,4 +69,4 @@ def test_platform_strategy_namespace_routes_to_golden_pit(monkeypatch):
 
     platform_cli.main()
 
-    assert captured == [["main.py", "workflow", "--help"]]
+    assert captured == [["workflow", "--help"]]

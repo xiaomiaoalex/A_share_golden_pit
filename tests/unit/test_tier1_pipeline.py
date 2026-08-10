@@ -1,3 +1,4 @@
+import time
 from datetime import date, datetime
 
 from src.data.point_in_time.contracts import (
@@ -13,6 +14,9 @@ from src.screening.tier1_v2.contracts import (
 )
 from src.screening.tier1_v2.pipeline import Tier1Pipeline
 from src.storage.tier1_repository import Tier1Repository
+from src.strategies.golden_pit.quantitative_screening.pipeline import (
+    _RunLeaseHeartbeat,
+)
 from tests.fixtures.tier1_synthetic import improving_financial_facts
 
 
@@ -86,6 +90,27 @@ class SyntheticProvider:
             ),
             "risk",
         )
+
+
+def test_run_lease_heartbeat_continues_during_slow_item_processing():
+    class RecordingRepository:
+        def __init__(self):
+            self.calls = 0
+
+        def heartbeat_run_lease(self, run_id, worker_token):
+            self.calls += 1
+
+    repository = RecordingRepository()
+    heartbeat = _RunLeaseHeartbeat(
+        repository, "run-1", "worker-1", interval_seconds=0.02
+    )
+
+    heartbeat.start()
+    time.sleep(0.075)
+    heartbeat.check()
+    heartbeat.stop()
+
+    assert repository.calls >= 3
 
 
 def run_one(tmp_path, provider, as_of=date(2026, 8, 10)):
@@ -317,6 +342,9 @@ def test_legacy_run_reconstructs_validated_universe_before_resume(tmp_path):
     )
     run_id = result["run_id"]
     with repository.connect() as connection:
+        connection.execute(
+            "DELETE FROM tier1_decision_history WHERE run_id=?", (run_id,)
+        )
         connection.execute("DELETE FROM tier1_item_attempts WHERE run_id=?", (run_id,))
         connection.execute("DELETE FROM screening_run_universe WHERE run_id=?", (run_id,))
         connection.execute(

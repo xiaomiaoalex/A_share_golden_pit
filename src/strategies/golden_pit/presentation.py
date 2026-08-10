@@ -44,7 +44,9 @@ class GoldenPitReadModel:
             ).fetchall()
         }
 
-    def overview(self, run_id: str | None = None) -> dict[str, Any]:
+    def overview(
+        self, run_id: str | None = None, *, compact: bool = False
+    ) -> dict[str, Any]:
         with self.connect() as connection:
             tables = self._tables(connection)
             if "screening_runs" not in tables:
@@ -85,19 +87,26 @@ class GoldenPitReadModel:
                 run.pop("data_quality_summary_json", None), {}
             )
 
-            candidates = self._candidates(connection, selected_id, tables)
-            quality = self._quality(connection, selected_id, tables)
-            activity = self._activity(connection, selected_id, tables)
-            counts = Counter(row["screen_status"] for row in candidates)
-            stage_a_pass = sum(row["screen_status"] == "PASS" for row in candidates)
-            stage_b_pass = sum(row["stage_b_status"] == "PASS" for row in candidates)
-            stage_c_pass = sum(row["stage_c_status"] == "PASS" for row in candidates)
-            pending_review = sum(
-                row["stage_b_status"] == "待人工复核"
-                or row["stage_c_status"] == "待人工复核"
-                for row in candidates
+            if compact:
+                candidate_page = self._candidate_page(
+                    connection, selected_id, tables, page=1, page_size=5
+                )
+                candidates = candidate_page["items"]
+                candidate_summary = candidate_page["summary"]
+            else:
+                candidates = self._candidates(connection, selected_id, tables)
+                candidate_summary = self._candidate_summary(candidates)
+            quality = self._quality(
+                connection, selected_id, tables, item_limit=0 if compact else None
             )
-            next_action = self._next_action(run, candidates)
+            activity = self._activity(connection, selected_id, tables)
+            counts = candidate_summary["screen_status_counts"]
+            stage_a_pass = candidate_summary["stage_a_pass"]
+            stage_b_pass = candidate_summary["stage_b_pass"]
+            stage_c_pass = candidate_summary["stage_c_pass"]
+            pending_review = candidate_summary["pending_review"]
+            candidate_total = candidate_summary["total"]
+            next_action = self._next_action_from_summary(run, candidate_summary)
             return {
                 "runs": runs,
                 "run": run,
@@ -105,7 +114,7 @@ class GoldenPitReadModel:
                     "universe": (
                         run.get("universe_size")
                         or (run.get("progress") or {}).get("total")
-                        or len(candidates)
+                        or candidate_total
                     ),
                     "stage_a_pass": stage_a_pass,
                     "stage_b_pass": stage_b_pass,
@@ -118,7 +127,7 @@ class GoldenPitReadModel:
                         "key": "A",
                         "name": "量化初筛",
                         "caption": "估值 · 分红 · 连续两季正增长 · 风险警示",
-                        "total": len(candidates),
+                        "total": candidate_total,
                         "passed": stage_a_pass,
                     },
                     {
@@ -137,10 +146,58 @@ class GoldenPitReadModel:
                     },
                 ],
                 "candidates": candidates,
+                "candidate_total": candidate_total,
                 "quality": quality,
                 "activity": activity,
                 "next_action": next_action,
             }
+
+    def catalog_snapshot(self) -> dict[str, Any]:
+        """Return only the latest run and aggregate metrics for strategy cards."""
+        overview = self.overview(compact=True)
+        return {"run": overview["run"], "summary": overview["summary"]}
+
+    def candidates_page(
+        self,
+        run_id: str,
+        *,
+        page: int = 1,
+        page_size: int = 100,
+        query: str = "",
+        filters: dict[str, str] | None = None,
+        sort_key: str | None = None,
+        sort_direction: str = "asc",
+    ) -> dict[str, Any]:
+        with self.connect() as connection:
+            tables = self._tables(connection)
+            return self._candidate_page(
+                connection,
+                run_id,
+                tables,
+                page=page,
+                page_size=page_size,
+                query=query,
+                filters=filters,
+                sort_key=sort_key,
+                sort_direction=sort_direction,
+            )
+
+    def quality_page(
+        self, run_id: str, *, page: int = 1, page_size: int = 200
+    ) -> dict[str, Any]:
+        page = max(1, page)
+        page_size = max(1, min(500, page_size))
+        with self.connect() as connection:
+            tables = self._tables(connection)
+            result = self._quality(
+                connection,
+                run_id,
+                tables,
+                item_limit=page_size,
+                item_offset=(page - 1) * page_size,
+            )
+        result.update({"page": page, "page_size": page_size})
+        return result
 
     def running_runs(self) -> list[dict[str, Any]]:
         """Return live quantitative-screening runs with database-backed progress."""
@@ -497,23 +554,213 @@ class GoldenPitReadModel:
         except ValueError:
             return None
 
-    def _candidates(
+    @staticmethod
+    def _candidate_summary(candidates: list[dict[str, Any]]) -> dict[str, Any]:
+        counts = Counter(row["screen_status"] for row in candidates)
+        stage_b_counts = Counter(row["stage_b_status"] for row in candidates)
+        stage_c_counts = Counter(row["stage_c_status"] for row in candidates)
+        return {
+            "total": len(candidates),
+            "stage_a_pass": sum(
+                row["screen_status"] == "PASS" for row in candidates
+            ),
+            "stage_b_pass": sum(
+                row["stage_b_status"] == "PASS" for row in candidates
+            ),
+            "stage_c_pass": sum(
+                row["stage_c_status"] == "PASS" for row in candidates
+            ),
+            "pending_review": sum(
+                row["stage_b_status"] == "待人工复核"
+                or row["stage_c_status"] == "待人工复核"
+                for row in candidates
+            ),
+            "screen_status_counts": dict(counts),
+            "stage_b_status_counts": dict(stage_b_counts),
+            "stage_c_status_counts": dict(stage_c_counts),
+        }
+
+    def _candidate_index(
         self, connection: sqlite3.Connection, run_id: str, tables: set[str]
+    ) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
+        if "tier1_decisions" not in tables:
+            return [], {}, {}
+        tier2 = self._latest_tier2(connection, run_id, tables)
+        tier3 = self._latest_tier3(connection, run_id, tables)
+        rows = connection.execute(
+            """
+            SELECT symbol, stock_name, screen_status, business_status, data_status,
+                   selected_pe_ttm AS pe_ttm,
+                   dividend_yield_ttm AS dividend_yield
+            FROM tier1_decisions WHERE run_id=?
+            """,
+            (run_id,),
+        ).fetchall()
+        index: list[dict[str, Any]] = []
+        for raw in rows:
+            item = dict(raw)
+            symbol = str(item["symbol"])
+            item["stage_b_status"] = self._stage_b_status(
+                item, tier2.get(symbol, {})
+            )
+            item["stage_c_status"] = self._stage_c_status(
+                item, tier2.get(symbol, {}), tier3.get(symbol, {})
+            )
+            index.append(item)
+        return index, tier2, tier3
+
+    @staticmethod
+    def _range_matches(value: Any, selected: str, kind: str) -> bool:
+        if selected == "ALL":
+            return True
+        present = value is not None
+        if selected == "MISSING":
+            return not present
+        if not present:
+            return False
+        numeric = float(value)
+        if kind == "pe":
+            return {
+                "LT15": numeric < 15,
+                "15TO30": 15 <= numeric < 30,
+                "GTE30": numeric >= 30,
+            }.get(selected, True)
+        return {
+            "GT5": numeric > 0.05,
+            "2TO5": 0.02 <= numeric <= 0.05,
+            "LT2": numeric < 0.02,
+        }.get(selected, True)
+
+    def _candidate_page(
+        self,
+        connection: sqlite3.Connection,
+        run_id: str,
+        tables: set[str],
+        *,
+        page: int,
+        page_size: int,
+        query: str = "",
+        filters: dict[str, str] | None = None,
+        sort_key: str | None = None,
+        sort_direction: str = "asc",
+    ) -> dict[str, Any]:
+        page = max(1, page)
+        page_size = max(1, min(500, page_size))
+        filters = filters or {}
+        index, tier2, tier3 = self._candidate_index(connection, run_id, tables)
+        summary = self._candidate_summary(index)
+        normalized_query = query.strip().lower()
+        filtered = [
+            item
+            for item in index
+            if (
+                not normalized_query
+                or normalized_query in str(item["symbol"]).lower()
+                or normalized_query in str(item["stock_name"]).lower()
+            )
+            and (
+                filters.get("stageA", "ALL") == "ALL"
+                or item["screen_status"] == filters.get("stageA")
+            )
+            and (
+                filters.get("data", "ALL") == "ALL"
+                or item["data_status"] == filters.get("data")
+            )
+            and self._range_matches(
+                item.get("pe_ttm"), filters.get("pe", "ALL"), "pe"
+            )
+            and self._range_matches(
+                item.get("dividend_yield"),
+                filters.get("dividend", "ALL"),
+                "dividend",
+            )
+            and (
+                filters.get("stageB", "ALL") == "ALL"
+                or item["stage_b_status"] == filters.get("stageB")
+            )
+            and (
+                filters.get("stageC", "ALL") == "ALL"
+                or item["stage_c_status"] == filters.get("stageC")
+            )
+        ]
+        if sort_key in {"pe_ttm", "dividend_yield"}:
+            reverse = sort_direction == "desc"
+            present = [item for item in filtered if item.get(sort_key) is not None]
+            missing = [item for item in filtered if item.get(sort_key) is None]
+            present.sort(
+                key=lambda item: (float(item[sort_key]), str(item["symbol"])),
+                reverse=reverse,
+            )
+            filtered = present + sorted(missing, key=lambda item: str(item["symbol"]))
+        else:
+            rank = {"PASS": 0, "REVIEW": 1, "PENDING_DATA": 2}
+            filtered.sort(
+                key=lambda item: (
+                    rank.get(str(item["screen_status"]), 3),
+                    str(item["symbol"]),
+                )
+            )
+        total = len(filtered)
+        start = (page - 1) * page_size
+        selected = filtered[start : start + page_size]
+        symbols = [str(item["symbol"]) for item in selected]
+        details = self._candidates(
+            connection,
+            run_id,
+            tables,
+            symbols=symbols,
+            tier2=tier2,
+            tier3=tier3,
+        )
+        by_symbol = {item["symbol"]: item for item in details}
+        return {
+            "items": [by_symbol[symbol] for symbol in symbols if symbol in by_symbol],
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "pages": max(1, (total + page_size - 1) // page_size),
+            "facets": {
+                "stage_b": sorted({item["stage_b_status"] for item in index}),
+                "stage_c": sorted({item["stage_c_status"] for item in index}),
+            },
+            "summary": summary,
+        }
+
+    def _candidates(
+        self,
+        connection: sqlite3.Connection,
+        run_id: str,
+        tables: set[str],
+        *,
+        symbols: list[str] | None = None,
+        tier2: dict[str, dict[str, Any]] | None = None,
+        tier3: dict[str, dict[str, Any]] | None = None,
     ) -> list[dict[str, Any]]:
         if "tier1_decisions" not in tables:
             return []
+        if symbols == []:
+            return []
+        symbol_clause = ""
+        parameters: list[Any] = [run_id]
+        if symbols is not None:
+            symbol_clause = f" AND symbol IN ({','.join('?' for _ in symbols)})"
+            parameters.extend(symbols)
         rows = connection.execute(
-            """
+            f"""
             SELECT * FROM tier1_decisions
-            WHERE run_id=? ORDER BY
+            WHERE run_id=?{symbol_clause} ORDER BY
                 CASE screen_status WHEN 'PASS' THEN 0 WHEN 'REVIEW' THEN 1
                      WHEN 'PENDING_DATA' THEN 2 ELSE 3 END,
                 symbol
             """,
-            (run_id,),
+            parameters,
         ).fetchall()
-        tier2 = self._latest_tier2(connection, run_id, tables)
-        tier3 = self._latest_tier3(connection, run_id, tables)
+        tier2 = tier2 if tier2 is not None else self._latest_tier2(
+            connection, run_id, tables
+        )
+        tier3 = tier3 if tier3 is not None else self._latest_tier3(
+            connection, run_id, tables
+        )
         results: list[dict[str, Any]] = []
         for raw in rows:
             row = dict(raw)
@@ -662,31 +909,67 @@ class GoldenPitReadModel:
 
     @staticmethod
     def _quality(
-        connection: sqlite3.Connection, run_id: str, tables: set[str]
+        connection: sqlite3.Connection,
+        run_id: str,
+        tables: set[str],
+        *,
+        item_limit: int | None = None,
+        item_offset: int = 0,
     ) -> dict[str, Any]:
         if "data_quality_assessments" not in tables:
-            return {"items": [], "providers": [], "gate_passed": None}
+            return {
+                "items": [],
+                "providers": [],
+                "gate_passed": None,
+                "total": 0,
+                "blocking_count": 0,
+                "warning_count": 0,
+            }
+        aggregate = connection.execute(
+            """
+            SELECT COUNT(*) AS total,
+                   SUM(CASE WHEN blocking=1 THEN 1 ELSE 0 END) AS blocking_count,
+                   SUM(CASE WHEN severity!='INFO' THEN 1 ELSE 0 END) AS warning_count
+            FROM data_quality_assessments WHERE run_id=?
+            """,
+            (run_id,),
+        ).fetchone()
+        query = """
+            SELECT symbol, field_group, provider, capability,
+                   verification_status, severity, blocking, issues_json, assessed_at
+            FROM data_quality_assessments WHERE run_id=? ORDER BY id DESC
+        """
+        parameters: list[Any] = [run_id]
+        if item_limit is not None:
+            query += " LIMIT ? OFFSET ?"
+            parameters.extend([item_limit, max(0, item_offset)])
         rows = [
             dict(row)
-            for row in connection.execute(
-                """
-                SELECT symbol, field_group, provider, capability,
-                       verification_status, severity, blocking, issues_json, assessed_at
-                FROM data_quality_assessments WHERE run_id=? ORDER BY id DESC
-                """,
-                (run_id,),
-            ).fetchall()
+            for row in connection.execute(query, parameters).fetchall()
         ]
         for row in rows:
             row["issues"] = _json(row.pop("issues_json"), [])
             row["blocking"] = bool(row["blocking"])
-        providers = sorted({str(row["provider"]) for row in rows})
+        providers = [
+            str(row[0])
+            for row in connection.execute(
+                """
+                SELECT DISTINCT provider FROM data_quality_assessments
+                WHERE run_id=? ORDER BY provider
+                """,
+                (run_id,),
+            ).fetchall()
+        ]
+        total = int(aggregate["total"] or 0)
+        blocking_count = int(aggregate["blocking_count"] or 0)
+        warning_count = int(aggregate["warning_count"] or 0)
         return {
             "items": rows,
             "providers": providers,
-            "gate_passed": not any(row["blocking"] for row in rows),
-            "blocking_count": sum(row["blocking"] for row in rows),
-            "warning_count": sum(row["severity"] not in {"INFO"} for row in rows),
+            "gate_passed": not bool(blocking_count),
+            "total": total,
+            "blocking_count": blocking_count,
+            "warning_count": warning_count,
         }
 
     @staticmethod
@@ -725,6 +1008,60 @@ class GoldenPitReadModel:
                 )
         events.sort(key=lambda item: str(item["time"]), reverse=True)
         return events[:8]
+
+    @staticmethod
+    def _next_action_from_summary(
+        run: dict[str, Any], summary: dict[str, Any]
+    ) -> dict[str, str]:
+        recovery = (run.get("progress") or {}).get("recovery") or {}
+        if recovery.get("can_resume"):
+            return {
+                "key": "resume-tier1",
+                "title": "从量化初筛断点继续",
+                "detail": (
+                    f"将跳过已完成标的，继续处理 "
+                    f"{recovery.get('unfinished_count', 0)} 只未完成股票。"
+                ),
+            }
+        if recovery.get("can_retry_data"):
+            return {
+                "key": "retry-tier1-data",
+                "title": "补跑量化初筛数据缺口",
+                "detail": (
+                    f"有 {recovery.get('data_gap_count', 0)} 只股票未产生有效决策"
+                    "或处于数据异常状态。"
+                ),
+            }
+        if run.get("status") not in {"FINISHED", "FINISHED_WITH_ERRORS"}:
+            return {
+                "key": "wait",
+                "title": "量化初筛正在运行",
+                "detail": "完成后可继续证据研究。",
+            }
+        if not summary.get("stage_a_pass"):
+            return {
+                "key": "complete",
+                "title": "本次没有通过硬筛的候选",
+                "detail": "可查看失败条件，或启动新的点时筛选。",
+            }
+        stage_b = summary.get("stage_b_status_counts", {})
+        stage_c = summary.get("stage_c_status_counts", {})
+        if stage_b.get("待生成证据包"):
+            count = stage_b["待生成证据包"]
+            return {
+                "key": "export-tier2",
+                "title": f"为 {count} 只候选生成证据包",
+                "detail": "进入证据研究前，先固化可复核证据与来源快照。",
+            }
+        if stage_b.get("待AI研究"):
+            return {"key": "import-tier2", "title": "等待证据研究结果", "detail": "完成研究 JSON 后，通过 CLI 校验并导入。"}
+        if stage_b.get("待人工复核"):
+            return {"key": "review-tier2", "title": "处理证据研究人工复核", "detail": "人工结论只能维持或下调系统建议。"}
+        if stage_c.get("待风险研究"):
+            return {"key": "tier3", "title": "准备行业化风险终审", "detail": "补充行业分类后导出风险研究模板。"}
+        if stage_c.get("待人工复核"):
+            return {"key": "review-tier3", "title": "处理风险终审人工复核", "detail": "复核硬否决、风险警告与价值陷阱信号。"}
+        return {"key": "complete", "title": "本次工作流已完成", "detail": "所有可进入候选均已形成最终状态。"}
 
     @staticmethod
     def _next_action(run: dict[str, Any], candidates: list[dict[str, Any]]) -> dict[str, str]:
@@ -774,7 +1111,8 @@ class GoldenPitReadModel:
             "summary": {"universe": 0, "stage_a_pass": 0, "stage_b_pass": 0, "stage_c_pass": 0, "pending_review": 0, "screen_status_counts": {}},
             "pipeline": [],
             "candidates": [],
-            "quality": {"items": [], "providers": [], "gate_passed": None, "blocking_count": 0, "warning_count": 0},
+            "candidate_total": 0,
+            "quality": {"items": [], "providers": [], "gate_passed": None, "total": 0, "blocking_count": 0, "warning_count": 0},
             "activity": [],
             "next_action": {"key": "new", "title": "启动第一次筛选", "detail": "输入筛选日期与股票代码开始。"},
         }
