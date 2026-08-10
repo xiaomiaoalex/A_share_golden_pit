@@ -1,320 +1,159 @@
 # A股黄金坑股票数据库
 
-> **核心理念**：在几千只A股中，持续等待极少数"长期价值仍在、价格严重错位"的资产，等待赔率和确定性同时达到可以重仓的水平。
+以“重仓长周期确定性的高赔率”为第一原则，持续识别长期价值仍在、但价格因阶段性
+悲观而明显错位的A股公司。本仓库只保留重构后的正式 Stage A/B/C 工作流。
 
-基于 **SOR3.0 第一性原则**：重仓长周期确定性的高赔率。
+## 正式研究链路
 
----
-
-## 系统架构
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    三层筛选体系                               │
-├─────────────────────────────────────────────────────────────┤
-│  Tier1 雷达池 (数百只)                                        │
-│  ├── 质量不错 + 大幅回撤 + 估值低位                            │
-│  └── 快速扫描，粗筛候选                                        │
-│                          ↓                                   │
-│  Tier2 深度观察池 (30-50只)                                   │
-│  ├── 确认基本面没有明显永久性破坏                               │
-│  └── FCF质量/ROIC/商誉/质押/财务风险检查                       │
-│                          ↓                                   │
-│  Tier3 核心黄金坑 (5-15只)                                    │
-│  ├── 高确定性 × 高赔率 × 长周期 × 可较大仓位                   │
-│  └── 护城河评分 + 赔率计算 + 预期差分析 + 证伪条件             │
-└─────────────────────────────────────────────────────────────┘
+```text
+Stage A：点时、硬条件、失败关闭的客观初筛
+  → Stage B：可复核证据包 + 人机协作研究 + 人工确认
+  → Stage C：行业化风险与价值陷阱过滤 + 人工终审
 ```
 
----
+系统不使用机械综合分抵消致命缺陷。业务状态与数据状态分开保存；数据不足进入
+`PENDING_DATA / DATA_ERROR / REVIEW`，不会被解释为通过。
+
+## Stage A：Tier1严格筛选
+
+五项硬条件必须全部明确成立：
+
+1. 点时 `PE(TTM) < 15`；
+2. 税前、已实施、按公司行动调整后的 `股息率(TTM) > 5%`；
+3. 最近3个连续可比单季度的营业收入同比严格逐季改善；
+4. 同一窗口的归母净利润同比严格逐季改善；
+5. 截至筛选日不属于ST、*ST或其他风险警示股票。
+
+利润同比窗口任一上年同期归母净利润小于等于0时进入
+`TURNAROUND_WATCHLIST`，不会混入正式雷达池。历史全市场筛选只接受具备精确点时
+能力的股票池；无合格来源时失败关闭，防止幸存者偏差。
+
+```bash
+python main.py screen-tier1 --as-of 2026-08-10 --symbols 000651 600519
+python main.py screen-tier1 --as-of 2020-12-31 \
+  --universe-file universe_20201231.csv
+python main.py verify-tier1-sources --as-of 2026-08-10 --symbols 000651
+python main.py show-tier1 --run-id RUN_ID
+```
+
+完整口径见 [Stage A说明](docs/stage_a_tier1_v2.md)。
+
+## Stage B：SOR3.0人机协作研究
+
+Stage B只接收同一运行中的 Stage A `PASS`。每条外部事实必须绑定：
+
+- 带时区的点时可得时间；
+- 本地证据快照及SHA-256；
+- 可在快照中检索到的原文摘录；
+- 事实与来源的逐项映射；
+- 二进制原件对应的可检索文本及哈希。
+
+任一关键维度 `FAIL` 即 `REJECT`；关键证据不足为 `REVIEW`。人工可以维持或下调
+系统结论，不能上调。
+
+```bash
+python main.py export-tier2 --run-id RUN_ID
+python main.py import-tier2 --file ai_results.json
+python main.py review-tier2 --run-id RUN_ID
+```
+
+完整契约见 [Stage B说明](docs/stage_b_tier2_human_ai.md) 和
+[研究提示词](docs/tier2_ai_prompt_template.md)。
+
+## Stage C：行业化风险与价值陷阱过滤
+
+Stage C只接收最新 Stage B人工 `PASS`，按一般企业、银行、保险、地产四类模型检查
+财务真实性、流动性、分红、治理、周期顶部和结构性价值陷阱。行业分类自身也必须
+经过同样的证据快照验证。
+
+- 硬否决成立：`REJECT`；
+- 风险警告或必要证据缺失：`REVIEW`；
+- 全部必要检查有证据且为 `CLEAR`：系统 `PASS`，仍需人工终审。
+
+```bash
+python main.py export-tier3 --run-id RUN_ID \
+  --classification-file industries.json
+python main.py import-tier3 --file filled_tier3_results.json
+python main.py review-tier3 --run-id RUN_ID
+```
+
+完整规则见 [Stage C说明](docs/stage_c_tier3_risk_filter.md)。
 
 ## 快速开始
 
-### 方式一：一键安装（推荐）
+```bash
+python -m venv venv
+# Linux/macOS: source venv/bin/activate
+# Windows: venv\Scripts\activate
+python -m pip install -r requirements.txt
+python main.py tier3-migrate
+python deploy_check.py
+```
+
+启动新的正式工作流，或检查已有运行：
 
 ```bash
-# 1. 克隆/下载项目
-cd golden-pit-db
-
-# 2. 运行安装脚本
-chmod +x install.sh
-./install.sh
-
-# 3. 开始扫描
-./run.sh scan
+python main.py workflow --as-of 2026-08-10 --symbols 000651 600519
+python main.py workflow --run-id RUN_ID
 ```
 
-### 方式二：手动安装
-
-```bash
-# 1. 创建虚拟环境
-python3 -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
-
-# 2. 安装依赖
-pip install -r requirements.txt
-
-# 3. 初始化数据库
-python -c "
-from config.settings import settings
-from src.storage.database import DatabaseManager
-db = DatabaseManager(settings.DB_PATH)
-db.initialize()
-"
-
-# 4. 运行扫描
-python main.py scan
-```
-
-### 方式三：Docker 部署
-
-```bash
-docker-compose up -d
-docker exec -it golden-pit python main.py scan
-```
-
----
-
-## 使用命令
-
-| 命令 | 说明 | 示例 |
-|------|------|------|
-| `./run.sh scan` | 全量三层扫描 | 完整流程，约10-30分钟 |
-| `./run.sh quick` | 快速扫描 | 仅Tier1雷达池，约2-5分钟 |
-| `./run.sh stock 000651` | 单股票深度分析 | 分析格力电器 |
-| `./run.sh show [1\|2\|3]` | 查看筛选结果 | 默认显示Tier3核心池 |
-| `./run.sh report` | 生成报告 | Excel + HTML仪表盘 |
-| `./run.sh stats` | 数据库统计 | 查看当前数据量 |
-
-### 单股票分析示例
-
-```bash
-./run.sh stock 000651
-```
-
-输出：
-- 综合评分（0-10分）
-- 黄金坑评级（S/A/B/C/价值陷阱）
-- 赔率计算（悲观/基准/乐观三情景）
-- 预期差分析（市场隐含利润 vs 你的假设）
-- 风险检查（A股特有风险）
-- 证伪条件（3-5条可验证的证伪指标）
-- 详细Markdown报告
-
----
-
-## 核心功能模块
-
-### 0. 报告输出格式（严格匹配《黄金坑数据库》模板）
-
-系统生成的 Excel 数据库与 `assets/黄金坑数据库_模板.xlsx` 完全一致，包含 7 个工作表：
-
-| 工作表 | 列数 | 说明 |
-|--------|------|------|
-| **使用说明** | - | 纲领、升降级标准、复核频率、铁律（静态保留） |
-| **雷达池** | 17 | 轻量字段：代码/价格/PE/PB/股息率/回撤/初筛判断 |
-| **深度观察池** | 56 | 完整字段：分组表头（基础信息/估值/盈利质量/黄金坑判断/预期差/三情景/SOR3.0/评分） |
-| **核心黄金坑** | 56 | 同深度观察池，仅保留最高质量标的 |
-| **价值陷阱** | 10 | 判定理由、关键证据、复盘跟踪 |
-| **证伪日志** | 10 | 证伪条件、触发阈值、当前读数、状态、处理动作 |
-| **字段字典** | - | 每个字段的定义、口径、来源要求（静态保留） |
-
-**字段填充策略**：
-- **系统自动计算**：股价/市值/PE/PB/股息率/估值分位/回撤/ROE/市场隐含利润（=市值÷当前PE）/预期差/三情景估值/赔率/评分/证伪读数
-- **系统初稿待人工复核**：黄金坑原因、市场悲观逻辑、基本面是否破坏、核心风险（均标注"系统初判"）
-- **留空待人工填充**：终端需求趋势、市场份额趋势、核心竞争优势、主要催化剂
-- **模板原样保留**：使用说明、字段字典、所有下拉验证（评级S/A/B/C、概率低中高、赔率等级、周期、仓位适配度）
-
-### 1. 三层筛选体系
-
-| 层级 | 目标 | 关键指标 | 输出数量 |
-|------|------|---------|---------|
-| **Tier1 雷达池** | 快速扫描全市场 | 回撤>30%、PE分位<30%、ROE>10% | 数百只 |
-| **Tier2 观察池** | 确认基本面未破坏 | FCF收益率>3%、ROIC>12%、商誉<30% | 30-50只 |
-| **Tier3 核心池** | 高赔率×高确定性 | 护城河评分≥4、赔率≥2:1、置信度≥70% | 5-15只 |
-
-### 2. 市场预期差分析（核心差异化）
-
-```
-市场隐含利润 = 当前市值 ÷ 市场给予的PE
-你的基准假设 = 基于证据的正常化利润
-预期差 = 你的假设 - 市场隐含利润
-
-赔率 = 乐观情景涨幅 ÷ 悲观情景跌幅
-```
-
-**示例**：
-- 市场认为利润从100→50，给10倍PE → 市值500亿
-- 你的研究认为利润更可能80-100 → 正常化价值1350亿
-- **赔率 ≈ 2.7倍**
-
-### 3. 估值体系
-
-- **历史估值分位**：5年PE/PB分位数
-- **三情景估值**：悲观/基准/乐观
-- **逆向DCF**：反推市场隐含增长率
-- **赔率计算**：上涨空间 ÷ 下跌空间
-
-### 4. A股特殊风险检查
-
-- 控股股东资金占用
-- 关联交易占比
-- 大股东质押率
-- 商誉/净资产
-- 应收账款异常
-- 存货异常
-- 资本化研发
-- 频繁并购/定增稀释
-- 审计意见
-- 分红与现金流匹配度
-
-### 5. 证伪机制
-
-每只股票必须提出 **3-5条可数据验证的证伪条件**：
-- 市场份额连续下降
-- 销量持续下降
-- 毛利率永久性下降
-- ROIC跌破阈值
-- 自由现金流恶化
-- 核心客户流失
-- 新技术替代
-
----
-
-## 数据字段
-
-每只股票记录：
-
-| 类别 | 字段 |
-|------|------|
-| 基础信息 | 代码、名称、行业、市值、股价 |
-| 估值指标 | PE/PB/EV-EBIT、股息率、历史分位 |
-| 质量指标 | ROE、ROIC、FCF、毛利率、净利率 |
-| 预期差 | 市场隐含利润、悲观假设、基准假设、预期差 |
-| 估值情景 | 悲观估值、合理估值、乐观估值 |
-| 赔率 | 赔率、确定性、周期、建议仓位 |
-| 风险 | 质押率、商誉占比、M-Score、风险等级 |
-| 证伪 | 证伪条件、关键跟踪指标 |
-
----
-
-## 项目结构
-
-```
-golden-pit-db/
-├── main.py                 # CLI主入口
-├── install.sh              # 一键安装脚本
-├── run.sh / run.bat        # 快捷启动脚本
-├── requirements.txt        # Python依赖
-├── Dockerfile              # Docker镜像
-├── docker-compose.yml      # Docker编排
-│
-├── config/                 # 配置
-│   ├── settings.py         # 全局配置
-│   └── thresholds.py       # 三层筛选阈值
-│
-├── src/
-│   ├── data/               # 数据层
-│   │   ├── providers/      # AKShare + baostock 适配器
-│   │   ├── cache.py        # 本地缓存
-│   │   └── fetcher.py      # 数据获取门面
-│   │
-│   ├── screening/          # 三层筛选
-│   │   ├── radar.py        # Tier1 雷达扫描
-│   │   ├── deep_screen.py  # Tier2 深度筛选
-│   │   └── core_confirm.py # Tier3 核心确认
-│   │
-│   ├── valuation/          # 估值引擎
-│   │   ├── historical.py   # 历史估值分位
-│   │   ├── scenarios.py    # 三情景估值
-│   │   ├── reverse_dcf.py  # 逆向DCF
-│   │   └── odds_calculator.py  # 赔率计算
-│   │
-│   ├── expectation/        # 预期差分析
-│   │   ├── implied_profit.py   # 市场隐含利润
-│   │   ├── pessimistic.py      # 悲观假设
-│   │   └── gap_quantifier.py   # 预期差量化
-│   │
-│   ├── scoring/            # 评分体系
-│   │   ├── dimensions.py   # 10维度评分
-│   │   └── aggregator.py   # 评分聚合
-│   │
-│   ├── risk/               # 风险检查
-│   │   ├── ashares_risk.py     # A股特殊风险
-│   │   ├── financial_redflags.py  # 财务红旗
-│   │   └── falsification.py    # 证伪条件生成
-│   │
-│   ├── storage/            # 数据存储
-│   │   ├── models.py       # SQLAlchemy模型
-│   │   ├── database.py     # 数据库管理
-│   │   └── dao.py          # 数据访问对象
-│   │
-│   └── report/             # 报告生成
-│       ├── excel_report.py     # Excel报告
-│       ├── html_dashboard.py   # HTML仪表盘
-│       └── stock_detail.py     # 单股票详情
-│
-├── data/                   # 数据目录
-│   ├── cache/              # API缓存
-│   └── db/                 # SQLite数据库
-│
-├── output/                 # 输出目录
-│   ├── reports/            # Excel/MD报告
-│   └── dashboards/         # HTML仪表盘
-│
-└── logs/                   # 运行日志
-```
-
----
+`workflow` 会汇总A/B/C状态并给出下一条受控操作，不会自动越过AI研究或人工复核。
 
 ## 数据源
 
-| 数据源 | 用途 | 优先级 |
-|--------|------|--------|
-| **AKShare** | 实时行情、财务指标、K线、分红 | 主数据源 |
-| **baostock** | 分红、成长/盈利/营运/偿债能力 | 备用数据源 |
-| **SQLite** | 本地持久化存储 | 本地 |
+| 来源 | 正式用途 | 点时边界 |
+|---|---|---|
+| AKShare/东方财富 | 当前行情、正式利润表、分红、部分历史简称 | 历史股票池能力有限 |
+| Tushare Pro | 点时股票池、PE/市值、营业收入、归母净利润、分红、历史ST | 需 `TUSHARE_TOKEN` |
+| BaoStock | 沪深历史行情、PE、每日ST、分红和送转 | 不用于近似季度财务趋势 |
+| SQLite | 运行、原始观察、血缘、质量、评估和人工复核 | 追加式版本迁移 |
 
-> **注意**：AKShare 和 baostock 均为免费开源数据源，数据来自公开渠道。建议配合公司公告、年报、券商研报进行交叉验证。
+默认顺序由 `TIER1_DATA_SOURCES=akshare,tushare,baostock` 控制。当前筛选可采用通过
+字段契约验证的供应商PE；历史回扫采用点时自计算并同时保存供应商值和自计算值。
 
----
+## 正式CLI
 
-## 评分体系
+| 命令 | 作用 |
+|---|---|
+| `workflow` | 启动或检查正式A→B→C工作流 |
+| `screen-tier1` | 执行Stage A严格筛选 |
+| `verify-tier1-sources` | 多源口径与数值交叉验证 |
+| `show-tier1` | 查看某次Stage A结果 |
+| `export/import/review-tier2` | Stage B证据包、研究导入和人工确认 |
+| `export/import/review-tier3` | Stage C模板、风险导入和人工终审 |
+| `tier1/2/3-migrate` | 应用或回滚对应阶段迁移 |
 
-10个维度，0-10分独立评分：
+## 项目结构
 
-| 维度 | 权重 | 说明 |
-|------|------|------|
-| 商业质量 | 12% | 商业模式、需求持续性 |
-| 竞争优势 | 15% | 护城河、壁垒 |
-| 长期需求确定性 | 12% | 行业需求、终端需求 |
-| 管理层 | 8% | 资本配置、分红回购 |
-| 财务质量 | 10% | 财务真实性、现金流 |
-| 估值安全边际 | 15% | 历史分位、绝对估值 |
-| 赔率 | 12% | 上涨/下跌空间比 |
-| 基本面可预测性 | 6% | 业绩可预测程度 |
-| 市场悲观程度 | 5% | 情绪极端化程度 |
-| 反转可验证性 | 5% | 催化剂可验证性 |
+```text
+config/                         正式阈值、Schema和行业风险规则
+src/data/point_in_time/         AKShare、Tushare、BaoStock点时适配
+src/data/quality/               来源能力、质量评估和闸门
+src/evidence/                   快照、哈希、摘录和事实映射验证
+src/screening/tier1_v2/         Stage A硬筛选
+src/screening/tier2_human_ai/   Stage B证据包和结论状态机
+src/risk/tier3/                 Stage C行业化风险模型
+src/storage/                    Stage A/B/C SQLite仓储
+scripts/migrations/             版本化、原子数据库迁移
+tests/                          离线业务测试和实时数据canary
+```
 
-**评级**：
-- **S级**：长周期确定性高赔率，可重仓
-- **A级**：高质量明显低估，赔率较高
-- **B级**：质量不错价格合理，观察名单
-- **C级**：便宜但基本面有问题，等待证据
-- **价值陷阱**：低估值来自长期竞争力下降
+## 验证
 
----
+```bash
+python -m pytest -q
+python -m ruff check --select F,I main.py deploy_check.py src tests
+python deploy_check.py
+```
+
+默认测试不访问网络。GitHub Actions定时运行AKShare、BaoStock以及配置Token后的
+Tushare实时契约canary，结果用于发现供应商接口或字段口径变化。
 
 ## 免责声明
 
-1. 本系统仅为**研究工具**，不构成任何投资建议
-2. 所有数据来自公开渠道，**不保证准确性**
-3. 历史业绩**不代表未来表现**
-4. 投资有风险，**入市需谨慎**
-5. 使用者应**独立判断、自担风险**
+本系统仅为研究和事实核查工具，不构成投资建议。公开数据可能存在错误、修订或延迟；
+任何投资判断都需要独立复核并自行承担风险。
 
----
+## License
 
-##  License
-
-MIT License - 仅供学习研究使用
+MIT License

@@ -1,0 +1,78 @@
+{
+  "rules_version": "tier3-rules-v1.0",
+  "evidence_policy": "Rules are evidence assertions, not universal numeric cutoffs. TRIGGERED/CLEAR requires dated sources; UNKNOWN forces REVIEW.",
+  "common_rules": [
+    {"id": "audit_opinion_nonstandard", "category": "ACCOUNTING_QUALITY", "effect": "HARD_VETO", "description": "最近审计意见并非标准无保留意见，或包含足以破坏报表可信度的事项。", "basis": "审计意见是财务报表可信度的基础；非标准意见必须逐项解释，不能由估值抵消。"},
+    {"id": "going_concern_uncertainty", "category": "LIQUIDITY", "effect": "HARD_VETO", "description": "审计报告或公告存在持续经营重大不确定性。", "basis": "持续经营不确定性直接放大永久损失风险。"},
+    {"id": "material_fraud_or_accounting_misstatement", "category": "ACCOUNTING_QUALITY", "effect": "HARD_VETO", "description": "存在已确认的重大财务造假、重大会计差错或系统性报表失真。", "basis": "已确认的重大报表失真使估值基础不可依赖。"},
+    {"id": "frequent_auditor_or_finance_head_changes", "category": "ACCOUNTING_QUALITY", "effect": "WARNING", "description": "审计机构或财务负责人频繁异常变更。", "basis": "人员频繁变更本身不是造假结论，但会降低财务信息可信度。"},
+    {"id": "shareholder_fund_occupation_or_illegal_guarantee", "category": "GOVERNANCE", "effect": "HARD_VETO", "description": "存在控股股东资金占用、重大违规担保或明确利益输送。", "basis": "上市公司资源无法可靠归属全体股东。"},
+    {"id": "major_investigation_penalty_or_litigation", "category": "GOVERNANCE", "effect": "WARNING", "description": "存在重大立案调查、行政处罚、诉讼或退市相关风险。", "basis": "调查和诉讼结果存在不确定性，需人工评估潜在损失。"},
+    {"id": "controlling_shareholder_pledge_or_reduction_risk", "category": "GOVERNANCE", "effect": "WARNING", "description": "控股股东高比例质押、被动平仓压力或持续异常减持可能影响控制权和治理稳定。", "basis": "质押和减持不是仅凭比例自动否决，必须结合股价、补仓能力、控制权和公告事实判断。"},
+    {"id": "unsustainable_dividend_funding", "category": "DIVIDEND_SUSTAINABILITY", "effect": "HARD_VETO", "description": "分红主要依赖新增负债、出售核心资产或侵蚀必要经营资本。", "basis": "Tier1高股息若无可持续现金来源，核心投资前提失效。"},
+    {"id": "structural_demand_collapse", "category": "STRUCTURAL_VALUE_TRAP", "effect": "HARD_VETO", "description": "终端或行业需求出现不可逆结构性萎缩。", "basis": "结构性需求消失不是可均值回归的周期困难。"},
+    {"id": "durable_competitive_advantage_loss", "category": "STRUCTURAL_VALUE_TRAP", "effect": "HARD_VETO", "description": "市场份额、客户基础或定价能力显示竞争优势持续丧失。", "basis": "长期盈利能力已发生不可逆破坏时低估值属于价值陷阱。"},
+    {"id": "regulatory_business_model_break", "category": "STRUCTURAL_VALUE_TRAP", "effect": "HARD_VETO", "description": "监管或政策变化已长期破坏盈利模式。", "basis": "制度性盈利约束无法用短期周期反转解释。"},
+    {"id": "harmful_capital_allocation", "category": "GOVERNANCE", "effect": "WARNING", "description": "管理层长期通过高价并购、持续稀释或低回报扩张损害股东价值。", "basis": "资本配置会决定经营现金最终能否转化为股东回报。"},
+    {"id": "no_value_realization_mechanism", "category": "STRUCTURAL_VALUE_TRAP", "effect": "WARNING", "description": "缺少分红、回购、盈利恢复或治理改善等价值回归机制。", "basis": "便宜本身不保证价值实现。"}
+  ],
+  "models": {
+    "INDUSTRIAL": {
+      "class": "IndustrialRiskModel",
+      "description": "一般工业、消费、科技、医药及其他非金融非地产企业。",
+      "additional_rules": [
+        {"id": "cfo_profit_persistent_divergence", "category": "ACCOUNTING_QUALITY", "effect": "WARNING", "description": "经营现金流与归母净利润长期显著背离且无合理营运资本解释。", "basis": "利润不能持续转化为现金会降低盈利质量。"},
+        {"id": "receivables_inventory_outgrow_revenue", "category": "ACCOUNTING_QUALITY", "effect": "WARNING", "description": "应收或存货持续显著快于营业收入增长。", "basis": "需要结合行业周转周期判断收入确认和库存减值风险。"},
+        {"id": "nonrecurring_profit_dependence", "category": "ACCOUNTING_QUALITY", "effect": "HARD_VETO", "description": "正常化利润主要依赖处置、补贴、投资收益或减值转回。", "basis": "一次性收益不能支持长期价值和持续分红。"},
+        {"id": "goodwill_intangible_capitalization_risk", "category": "ACCOUNTING_QUALITY", "effect": "WARNING", "description": "商誉、无形资产或资本化支出存在重大减值或利润美化风险。", "basis": "不设跨行业统一比例，要求结合并购标的、会计政策和同业口径。"},
+        {"id": "liquidity_refinancing_pressure", "category": "LIQUIDITY", "effect": "HARD_VETO", "description": "短债、利息负担和再融资约束形成实质偿付压力。", "basis": "偿付依赖外部融资时永久损失风险可能先于经营修复发生。"},
+        {"id": "peak_cycle_earnings_low_pe", "category": "CYCLE_PEAK", "effect": "HARD_VETO", "description": "当前低PE主要建立在不可持续的周期峰值利润或价差之上。", "basis": "应以正常化利润而非峰值利润判断低估。"},
+        {"id": "sustaining_capex_consumes_economics", "category": "STRUCTURAL_VALUE_TRAP", "effect": "HARD_VETO", "description": "维持竞争地位所需资本开支持续吞噬经营现金，正常化自由现金流不足。", "basis": "会计利润无法转化为可分配所有者收益。"},
+        {"id": "cash_not_attributable_or_minority_leakage", "category": "STRUCTURAL_VALUE_TRAP", "effect": "HARD_VETO", "description": "账面现金受限、位于非控制主体或被少数股东/关联方长期侵蚀。", "basis": "不能自由归属上市公司股东的现金不应按等额价值计入。"}
+      ]
+    },
+    "BANK": {
+      "class": "BankRiskModel",
+      "description": "商业银行；不使用工业企业自由现金流和资本开支模型。",
+      "additional_rules": [
+        {"id": "bank_regulatory_capital_breach", "category": "LIQUIDITY", "effect": "HARD_VETO", "description": "核心一级资本或其他监管资本约束已实质威胁持续经营、分红或增长。", "basis": "银行偿付能力以监管资本和风险加权资产为核心。"},
+        {"id": "bank_asset_quality_structural_deterioration", "category": "ACCOUNTING_QUALITY", "effect": "HARD_VETO", "description": "不良、关注、逾期或重组资产显示结构性恶化且拨备不足以吸收损失。", "basis": "资产质量决定账面净资产和利润的可兑现程度。"},
+        {"id": "bank_liquidity_or_wholesale_funding_stress", "category": "LIQUIDITY", "effect": "HARD_VETO", "description": "流动性指标、存款稳定性或批发融资依赖显示实质资金压力。", "basis": "银行流动性风险具有非线性和传染性。"},
+        {"id": "bank_provisioning_or_evergreening_risk", "category": "ACCOUNTING_QUALITY", "effect": "WARNING", "description": "拨备、核销、展期或风险分类口径可能延迟确认信用损失。", "basis": "需要穿透表内外信用风险和同业口径。"},
+        {"id": "bank_related_party_credit_concentration", "category": "GOVERNANCE", "effect": "HARD_VETO", "description": "关联方授信或单一行业/客户集中度构成重大不可控风险。", "basis": "集中信用暴露可能绕过正常风险定价并侵蚀资本。"},
+        {"id": "bank_dividend_weakens_regulatory_capital", "category": "DIVIDEND_SUSTAINABILITY", "effect": "HARD_VETO", "description": "分红明显削弱监管资本缓冲或依赖资本补充维持。", "basis": "银行分红必须服从监管资本和资产质量。"},
+        {"id": "bank_franchise_margin_structural_erosion", "category": "STRUCTURAL_VALUE_TRAP", "effect": "WARNING", "description": "息差、手续费能力或核心负债优势发生持续结构性削弱。", "basis": "盈利能力下降需区分周期压缩与负债端护城河消失。"},
+        {"id": "bank_credit_cost_cycle_peak_profit", "category": "CYCLE_PEAK", "effect": "HARD_VETO", "description": "低PE主要来自异常低信用成本、拨备释放或未充分确认损失。", "basis": "用正常化信用成本重估利润，避免把周期顶部当低估。"}
+      ]
+    },
+    "INSURANCE": {
+      "class": "InsuranceRiskModel",
+      "description": "保险公司；重点使用偿付能力、准备金和资产负债匹配。",
+      "additional_rules": [
+        {"id": "insurance_solvency_pressure", "category": "LIQUIDITY", "effect": "HARD_VETO", "description": "核心或综合偿付能力约束实质威胁经营、分红或新业务。", "basis": "偿付能力是保险公司承保和资本分配的硬约束。"},
+        {"id": "insurance_asset_liability_mismatch", "category": "LIQUIDITY", "effect": "HARD_VETO", "description": "久期、现金流或保证利率错配形成重大不可逆风险。", "basis": "长期负债必须由期限和收益特征匹配的资产支持。"},
+        {"id": "insurance_investment_asset_quality", "category": "ACCOUNTING_QUALITY", "effect": "HARD_VETO", "description": "非标、地产或其他投资资产存在重大信用损失且资本缓冲不足。", "basis": "投资资产质量会同时影响净资产、利润和偿付能力。"},
+        {"id": "insurance_reserve_adequacy", "category": "ACCOUNTING_QUALITY", "effect": "WARNING", "description": "准备金、精算假设或合同服务边际释放存在激进性风险。", "basis": "保险利润高度依赖长期精算假设，需要跨期和同业验证。"},
+        {"id": "insurance_dividend_weakens_solvency", "category": "DIVIDEND_SUSTAINABILITY", "effect": "HARD_VETO", "description": "分红削弱偿付能力缓冲或依赖资本补充。", "basis": "股息必须在满足保单义务和监管资本后分配。"},
+        {"id": "insurance_new_business_value_structural_decline", "category": "STRUCTURAL_VALUE_TRAP", "effect": "HARD_VETO", "description": "新业务价值、渠道能力或客户需求发生结构性下降。", "basis": "仅靠存量释放而无高质量新业务会削弱长期内含价值。"},
+        {"id": "insurance_persistency_or_surrender_deterioration", "category": "STRUCTURAL_VALUE_TRAP", "effect": "WARNING", "description": "继续率、退保或代理人质量持续恶化。", "basis": "客户留存和渠道质量决定新业务利润兑现。"},
+        {"id": "insurance_investment_return_peak_profit", "category": "CYCLE_PEAK", "effect": "HARD_VETO", "description": "低PE主要建立在不可持续投资收益、公允价值变动或会计释放之上。", "basis": "需要用正常化投资回报和承保利润评估。"}
+      ]
+    },
+    "REAL_ESTATE": {
+      "class": "RealEstateRiskModel",
+      "description": "房地产开发及强类地产企业；重点穿透受限现金、交付和表外义务。",
+      "additional_rules": [
+        {"id": "realestate_restricted_cash_short_debt_gap", "category": "LIQUIDITY", "effect": "HARD_VETO", "description": "剔除预售监管和项目受限资金后，现金无法覆盖近期刚性债务。", "basis": "账面现金不等于母公司可调度现金。"},
+        {"id": "realestate_refinancing_or_default_pressure", "category": "LIQUIDITY", "effect": "HARD_VETO", "description": "存在展期、违约、债务重组或关键融资渠道关闭。", "basis": "再融资失败可能在资产价值兑现前造成永久损失。"},
+        {"id": "realestate_delivery_obligation_stress", "category": "LIQUIDITY", "effect": "HARD_VETO", "description": "预售交付义务和项目建设资金缺口形成重大压力。", "basis": "预收款对应交付义务，不能简单视为低成本融资。"},
+        {"id": "realestate_off_balance_obligations", "category": "ACCOUNTING_QUALITY", "effect": "HARD_VETO", "description": "合作项目、担保、明股实债或其他表外义务可能显著侵蚀权益。", "basis": "需要穿透并表边界和项目层负债。"},
+        {"id": "realestate_inventory_impairment_risk", "category": "ACCOUNTING_QUALITY", "effect": "WARNING", "description": "存货成本、售价和去化显示重大减值风险。", "basis": "地产存货必须按城市、项目和可售货值判断，不能使用统一比例。"},
+        {"id": "realestate_sales_collection_structural_decline", "category": "STRUCTURAL_VALUE_TRAP", "effect": "HARD_VETO", "description": "销售、回款和土储质量显示公司需求或信用结构性弱化。", "basis": "回款能力决定去杠杆和项目交付。"},
+        {"id": "realestate_dividend_drains_delivery_cash", "category": "DIVIDEND_SUSTAINABILITY", "effect": "HARD_VETO", "description": "分红消耗保交付、偿债或项目运营必需现金。", "basis": "股息不能优先于刚性交付和偿债义务。"},
+        {"id": "realestate_cycle_peak_or_stale_book_value", "category": "CYCLE_PEAK", "effect": "HARD_VETO", "description": "低PE/PB依赖高毛利旧项目、滞后结算利润或未减值账面资产。", "basis": "应以项目可变现价值和正常化毛利而非历史账面值判断。"},
+        {"id": "realestate_cash_not_upstreamable", "category": "STRUCTURAL_VALUE_TRAP", "effect": "HARD_VETO", "description": "项目公司现金因合作方、监管或债务条款无法上划至上市公司。", "basis": "不可上划现金不能支持母公司偿债与股东回报。"}
+      ]
+    }
+  }
+}

@@ -1,30 +1,13 @@
 # A股黄金坑股票数据库 - 依赖清单
 # Python 3.10+ 推荐 3.11
 
-# 核心数据处理
+# 点时数据处理
 pandas>=2.0.0,<4.0.0
-numpy>=1.24.0,<3.0.0
 
 # A股数据源
 akshare>=1.14.0
-baostock>=0.8.9
+baostock>=0.9.3,<1.0
+tushare>=1.4.29,<2.0
 
-# 数据库
-SQLAlchemy>=2.0.0
-
-# Excel报告
-openpyxl>=3.1.0
-
-# 可视化
-matplotlib>=3.7.0
-seaborn>=0.12.0
-plotly>=5.18.0
-
-# HTTP请求
-requests>=2.31.0
-beautifulsoup4>=4.12.0
-lxml>=4.9.0
-
-# 工具
-python-dateutil>=2.8.0
-pytz>=2023.3
+# 结构化证据契约
+jsonschema>=4.22.0,<5.0

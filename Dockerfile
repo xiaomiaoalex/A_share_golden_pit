@@ -33,19 +33,10 @@ RUN pip install --no-cache-dir --upgrade pip && \
 COPY . .
 
 # 创建必要的目录
-RUN mkdir -p data/cache data/db output/reports output/dashboards logs
+RUN mkdir -p data/db output logs
 
 # 初始化数据库
-RUN python -c "
-from config.settings import settings
-from src.storage.database import DatabaseManager
-db = DatabaseManager(settings.DB_PATH)
-db.initialize()
-print('Database initialized')
-"
-
-# 暴露端口（如果有Web界面）
-EXPOSE 8000
+RUN python main.py tier3-migrate
 
 # 默认命令
 CMD ["python", "main.py", "--help"]

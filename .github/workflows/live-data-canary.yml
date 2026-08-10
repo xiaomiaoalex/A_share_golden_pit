@@ -1,0 +1,37 @@
+name: Live data contract canary
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "20 1 * * 1-5"
+
+concurrency:
+  group: live-data-contract-canary
+  cancel-in-progress: false
+
+jobs:
+  verify-live-contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      RUN_LIVE_DATA_TESTS: "1"
+      TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install test dependencies
+        run: python -m pip install -r requirements-dev.txt
+      - name: Run AKShare, BaoStock and optional Tushare canaries
+        run: >-
+          python -m pytest -o addopts="" -m live tests/live
+          --junitxml=live-data-canary.xml
+      - name: Upload canary evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-data-canary-${{ github.run_id }}
+          path: live-data-canary.xml
+          retention-days: 30

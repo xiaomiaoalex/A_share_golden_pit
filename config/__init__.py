@@ -1,11 +1,5 @@
-"""A股黄金坑股票数据库 - 配置模块"""
+"""A股黄金坑股票数据库正式配置。"""
 
-from .settings import Settings
-from .thresholds import RadarThreshold, DeepScreenThreshold, CoreConfirmThreshold
+from .settings import Settings, settings
 
-__all__ = [
-    'Settings',
-    'RadarThreshold',
-    'DeepScreenThreshold',
-    'CoreConfirmThreshold',
-]
+__all__ = ["Settings", "settings"]
