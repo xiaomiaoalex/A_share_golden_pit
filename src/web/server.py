@@ -4,93 +4,29 @@ from __future__ import annotations
 
 import json
 import mimetypes
-import subprocess
 import sys
 import threading
-import uuid
 import webbrowser
-from datetime import date, datetime, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
-from src.storage.tier2_repository import Tier2Repository
-from src.storage.tier3_repository import Tier3Repository
+from src.execution import JobRegistry
+from src.strategies import StrategyRegistry, build_strategy_registry
 
-from .dashboard import DashboardService
-
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
 STATIC_ROOT = Path(__file__).resolve().parent / "static"
 MAX_BODY = 1_000_000
 
 
-class JobRegistry:
-    """Small in-memory registry for long-running CLI operations."""
-
-    def __init__(self) -> None:
-        self._jobs: dict[str, dict[str, Any]] = {}
-        self._lock = threading.Lock()
-
-    def start(self, command: list[str], label: str) -> dict[str, Any]:
-        job_id = str(uuid.uuid4())
-        job = {
-            "job_id": job_id,
-            "label": label,
-            "status": "RUNNING",
-            "started_at": datetime.now(timezone.utc).isoformat(),
-            "finished_at": None,
-            "output": "",
-            "return_code": None,
-        }
-        with self._lock:
-            self._jobs[job_id] = job
-        thread = threading.Thread(
-            target=self._run, args=(job_id, command), daemon=True
-        )
-        thread.start()
-        return dict(job)
-
-    def _run(self, job_id: str, command: list[str]) -> None:
-        try:
-            result = subprocess.run(
-                command,
-                cwd=PROJECT_ROOT,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=60 * 60,
-                check=False,
-            )
-            output = (result.stdout + "\n" + result.stderr).strip()[-20_000:]
-            status = "SUCCEEDED" if result.returncode == 0 else "FAILED"
-            return_code = result.returncode
-        except Exception as exc:  # pragma: no cover - defensive job boundary
-            output = str(exc)
-            status = "FAILED"
-            return_code = -1
-        with self._lock:
-            self._jobs[job_id].update(
-                {
-                    "status": status,
-                    "finished_at": datetime.now(timezone.utc).isoformat(),
-                    "output": output,
-                    "return_code": return_code,
-                }
-            )
-
-    def list(self) -> list[dict[str, Any]]:
-        with self._lock:
-            values = [dict(job) for job in self._jobs.values()]
-        return sorted(values, key=lambda item: item["started_at"], reverse=True)[:20]
-
-
-def build_handler(db_path: str | Path, jobs: JobRegistry | None = None):
-    service = DashboardService(db_path)
+def build_handler(
+    db_path: str | Path,
+    jobs: JobRegistry | None = None,
+    strategies: StrategyRegistry | None = None,
+):
     registry = jobs or JobRegistry()
-    db = str(db_path)
+    strategy_registry = strategies or build_strategy_registry(db_path)
 
     class ConsoleHandler(BaseHTTPRequestHandler):
         server_version = "GoldenPitConsole/1.0"
@@ -101,16 +37,41 @@ def build_handler(db_path: str | Path, jobs: JobRegistry | None = None):
         def do_GET(self) -> None:  # noqa: N802
             parsed = urlparse(self.path)
             try:
+                parts = parsed.path.strip("/").split("/")
+                if parsed.path == "/api/strategies":
+                    self._json(
+                        HTTPStatus.OK, {"strategies": strategy_registry.catalog()}
+                    )
+                    return
+                if (
+                    len(parts) == 4
+                    and parts[:2] == ["api", "strategies"]
+                    and parts[3] == "overview"
+                ):
+                    run_id = parse_qs(parsed.query).get("run_id", [None])[0]
+                    self._json(
+                        HTTPStatus.OK,
+                        strategy_registry.get(parts[2]).overview(run_id),
+                    )
+                    return
                 if parsed.path == "/api/overview":
                     run_id = parse_qs(parsed.query).get("run_id", [None])[0]
-                    self._json(HTTPStatus.OK, service.overview(run_id))
+                    self._json(
+                        HTTPStatus.OK,
+                        strategy_registry.get("golden-pit").overview(run_id),
+                    )
                     return
                 if parsed.path == "/api/jobs":
+                    running_runs = [
+                        run
+                        for module in strategy_registry.modules()
+                        for run in module.running_runs()
+                    ]
                     self._json(
                         HTTPStatus.OK,
                         {
                             "jobs": registry.list(),
-                            "running_runs": service.running_runs(),
+                            "running_runs": running_runs,
                         },
                     )
                     return
@@ -124,140 +85,37 @@ def build_handler(db_path: str | Path, jobs: JobRegistry | None = None):
             parsed = urlparse(self.path)
             try:
                 body = self._body()
-                if parsed.path == "/api/workflows":
-                    self._start_workflow(body)
-                elif parsed.path == "/api/actions/export-tier2":
-                    self._export_tier2(body)
-                elif parsed.path == "/api/actions/resume-tier1":
-                    self._resume_tier1(body, data_retry=False)
-                elif parsed.path == "/api/actions/retry-tier1-data":
-                    self._resume_tier1(body, data_retry=True)
-                elif parsed.path == "/api/reviews/stage-b":
-                    self._review_stage_b(body)
-                elif parsed.path == "/api/reviews/stage-c":
-                    self._review_stage_c(body)
-                else:
-                    self._json(HTTPStatus.NOT_FOUND, {"error": "接口不存在"})
+                parts = parsed.path.strip("/").split("/")
+                if len(parts) == 5 and parts[:2] == ["api", "strategies"] and parts[3] == "actions":
+                    self._handle_strategy_action(parts[2], parts[4], body)
+                    return
+                legacy_actions = {
+                    "/api/workflows": "run",
+                    "/api/actions/export-tier2": "export-evidence",
+                    "/api/actions/resume-tier1": "resume",
+                    "/api/actions/retry-tier1-data": "retry-data",
+                    "/api/reviews/stage-b": "review-stage-b",
+                    "/api/reviews/stage-c": "review-stage-c",
+                }
+                action = legacy_actions.get(parsed.path)
+                if action:
+                    self._handle_strategy_action("golden-pit", action, body)
+                    return
+                self._json(HTTPStatus.NOT_FOUND, {"error": "接口不存在"})
             except (ValueError, KeyError) as exc:
                 self._json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
             except Exception as exc:  # pragma: no cover - HTTP safety boundary
                 self._json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": str(exc)})
 
-        def _start_workflow(self, body: dict[str, Any]) -> None:
-            as_of = str(body.get("as_of", "")).strip()
-            try:
-                date.fromisoformat(as_of)
-            except ValueError as exc:
-                raise ValueError("筛选日期必须是 YYYY-MM-DD") from exc
-            scope = str(body.get("scope", "symbols")).strip().lower()
-            if scope not in {"market", "symbols"}:
-                raise ValueError("scope 必须为 market 或 symbols")
-            symbols = body.get("symbols", [])
-            if isinstance(symbols, str):
-                symbols = [item for item in symbols.replace(",", " ").split() if item]
-            clean_symbols = []
-            for value in symbols:
-                symbol = str(value).strip().upper()
-                if symbol.endswith((".SH", ".SZ", ".BJ")):
-                    symbol = symbol[:-3]
-                if not symbol.isdigit() or len(symbol) > 6:
-                    raise ValueError(f"无效股票代码: {value}")
-                clean_symbols.append(symbol.zfill(6))
-            if scope == "symbols" and not clean_symbols:
-                raise ValueError("请至少输入一个股票代码")
-            command = [
-                sys.executable,
-                str(PROJECT_ROOT / "main.py"),
-                "workflow",
-                "--as-of",
-                as_of,
-                "--db",
-                db,
-            ]
-            if scope == "symbols":
-                command.extend(["--symbols", *dict.fromkeys(clean_symbols)])
-            label = (
-                f"{as_of} 全市场 Stage A 筛选"
-                if scope == "market"
-                else f"{as_of} Stage A 筛选（{len(set(clean_symbols))} 只）"
-            )
-            job = registry.start(command, label)
-            self._json(HTTPStatus.ACCEPTED, {"job": job})
-
-        def _export_tier2(self, body: dict[str, Any]) -> None:
-            run_id = self._required(body, "run_id")
-            symbols = body.get("symbols") or []
-            command = [
-                sys.executable,
-                str(PROJECT_ROOT / "main.py"),
-                "export-tier2",
-                "--run-id",
-                run_id,
-                "--db",
-                db,
-            ]
-            if symbols:
-                command.extend(["--symbols", *[str(item) for item in symbols]])
-            job = registry.start(command, "生成 Stage B 证据包")
-            self._json(HTTPStatus.ACCEPTED, {"job": job})
-
-        def _resume_tier1(
-            self, body: dict[str, Any], *, data_retry: bool
+        def _handle_strategy_action(
+            self, strategy_id: str, action: str, body: dict[str, Any]
         ) -> None:
-            run_id = self._required(body, "run_id")
-            symbols = body.get("symbols") or []
-            command = [
-                sys.executable,
-                str(PROJECT_ROOT / "main.py"),
-                "retry-tier1-data" if data_retry else "resume-tier1",
-                "--run-id",
-                run_id,
-                "--db",
-                db,
-            ]
-            if symbols:
-                command.extend(["--symbols", *[str(item) for item in symbols]])
-            label = (
-                "Stage A 数据缺口补跑" if data_retry else "Stage A 断点续跑"
-            )
-            job = registry.start(command, label)
-            self._json(HTTPStatus.ACCEPTED, {"job": job})
-
-        def _review_stage_b(self, body: dict[str, Any]) -> None:
-            review_id = Tier2Repository(db).save_human_review(
-                assessment_id=self._required(body, "assessment_id"),
-                decision=self._decision(body),
-                reviewer=self._required(body, "reviewer"),
-                rationale=self._required(body, "rationale"),
-                expected_run_id=self._required(body, "run_id"),
-                expected_symbol=self._required(body, "symbol"),
-            )
-            self._json(HTTPStatus.CREATED, {"review_id": review_id})
-
-        def _review_stage_c(self, body: dict[str, Any]) -> None:
-            review_id = Tier3Repository(db).save_human_review(
-                risk_assessment_id=self._required(body, "risk_assessment_id"),
-                decision=self._decision(body),
-                reviewer=self._required(body, "reviewer"),
-                rationale=self._required(body, "rationale"),
-                expected_run_id=self._required(body, "run_id"),
-                expected_symbol=self._required(body, "symbol"),
-            )
-            self._json(HTTPStatus.CREATED, {"review_id": review_id})
-
-        @staticmethod
-        def _required(body: dict[str, Any], key: str) -> str:
-            value = str(body.get(key, "")).strip()
-            if not value:
-                raise ValueError(f"缺少字段: {key}")
-            return value
-
-        @staticmethod
-        def _decision(body: dict[str, Any]) -> str:
-            decision = str(body.get("decision", "")).upper()
-            if decision not in {"PASS", "REVIEW", "REJECT"}:
-                raise ValueError("decision 必须为 PASS、REVIEW 或 REJECT")
-            return decision
+            operation = strategy_registry.get(strategy_id).handle_action(action, body)
+            if operation.kind == "job":
+                job = registry.start(list(operation.command), operation.label)
+                self._json(operation.status, {"job": job})
+                return
+            self._json(operation.status, operation.payload)
 
         def _body(self) -> dict[str, Any]:
             length = int(self.headers.get("Content-Length", "0"))
@@ -276,7 +134,11 @@ def build_handler(db_path: str | Path, jobs: JobRegistry | None = None):
 
         def _static(self, path: str) -> None:
             relative = "index.html" if path in {"", "/"} else unquote(path.lstrip("/"))
-            if relative not in {"index.html", "styles.css", "app.js"}:
+            allowed = (
+                relative in {"index.html", "styles.css", "app.js"}
+                or relative.startswith("strategies/") and relative.endswith(".js")
+            )
+            if not allowed or ".." in Path(relative).parts:
                 self.send_error(HTTPStatus.NOT_FOUND)
                 return
             file_path = STATIC_ROOT / relative
@@ -314,7 +176,7 @@ def run_server(
 ) -> None:
     server = ThreadingHTTPServer((host, port), build_handler(db_path))
     url = f"http://{host}:{port}"
-    print(f"黄金坑研究控制台已启动: {url}")
+    print(f"多策略选股研究平台已启动: {url}")
     print("按 Ctrl+C 停止服务")
     if open_browser:
         threading.Timer(0.5, lambda: webbrowser.open(url)).start()

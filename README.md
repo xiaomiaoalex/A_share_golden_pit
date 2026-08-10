@@ -103,9 +103,10 @@ python main.py workflow --run-id RUN_ID
 
 ## Web 研究控制台
 
-项目内置零新增依赖的本地 Web 界面，可视化查看研究漏斗、候选股详情、数据质量和
-运行记录，并可一键启动全市场筛选（或指定股票）、生成 Stage B 证据包以及提交
-Stage B/C 人工复核：
+项目内置零新增依赖的多策略 Web 研究平台。首页集中展示已注册策略；每个策略拥有
+独立的结果投影和前端展示模块。当前接入的首个策略是 Stage A/B/C 黄金坑流程，可
+查看研究漏斗、候选股详情、数据质量和运行记录，并可一键启动全市场筛选（或指定
+股票）、生成 Stage B 证据包以及提交 Stage B/C 人工复核：
 
 ```bash
 python web_app.py
@@ -120,6 +121,10 @@ python web_app.py --db data/db/golden_pit.db --port 9000 --no-browser
 控制台默认仅监听本机回环地址。筛选和证据包导出在后台执行，可在“运行记录”查看
 状态；AI研究 JSON 和行业分类等正式材料仍通过对应 CLI 导入，以保留既有的严格校验
 和证据契约。
+
+平台通过策略注册表隔离数据、策略、执行和展示层。新增策略只需实现稳定策略契约、
+在组合根注册并提供独立前端模块，不需要修改通用 HTTP 路由或后台任务执行器。架构
+和接入说明见 [多策略选股架构](docs/strategy_architecture.md)。
 
 ### 断点续跑与数据缺口补跑
 
@@ -177,7 +182,9 @@ src/screening/tier1_v2/         Stage A硬筛选
 src/screening/tier2_human_ai/   Stage B证据包和结论状态机
 src/risk/tier3/                 Stage C行业化风险模型
 src/storage/                    Stage A/B/C SQLite仓储
-src/web/                        本地Web控制台、API与前端静态资源
+src/strategies/                 可注册选股策略、读模型与策略动作
+src/execution/                  策略无关的后台任务执行能力
+src/web/                        多策略Web平台、通用API与独立策略展示模块
 scripts/migrations/             版本化、原子数据库迁移
 tests/                          离线业务测试和实时数据canary
 ```

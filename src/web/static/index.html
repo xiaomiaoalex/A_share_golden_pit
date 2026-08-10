@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#0b3028">
-  <title>砺金研策 · A股黄金坑研究控制台</title>
+  <title>砺金研策 · 多策略选股研究平台</title>
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
@@ -14,13 +14,20 @@
         <div class="brand-mark" aria-hidden="true">
           <svg viewBox="0 0 48 48"><path d="M9 31.5 18 22l6.2 6.1L39 12"/><path d="M32 12h7v7"/><path d="M9 39h30"/></svg>
         </div>
-        <div><strong>砺金研策</strong><span>GOLDEN PIT RESEARCH</span></div>
+        <div><strong>砺金研策</strong><span>MULTI-STRATEGY RESEARCH</span></div>
       </div>
 
       <nav class="main-nav" aria-label="主导航">
-        <button class="nav-item active" data-page="overview">
+        <button class="nav-item shell-nav active" data-shell-page="home">
           <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/></svg>
-          <span>研究总览</span>
+          <span>策略总览</span><span class="nav-count" id="strategyNavCount">0</span>
+        </button>
+        <div class="strategy-catalog-nav" id="strategyCatalogNav"></div>
+        <div class="strategy-nav hidden" id="goldenPitNav" data-strategy-nav="golden-pit">
+        <span class="nav-section-label">黄金坑策略</span>
+        <button class="nav-item" data-page="overview">
+          <svg viewBox="0 0 24 24"><path d="M4 13h6V4H4v9Zm0 7h6v-4H4v4Zm10 0h6v-9h-6v9Zm0-16v4h6V4h-6Z"/></svg>
+          <span>策略看板</span>
         </button>
         <button class="nav-item" data-page="candidates">
           <svg viewBox="0 0 24 24"><path d="M4 19V9"/><path d="M10 19V5"/><path d="M16 19v-7"/><path d="M22 19H2"/></svg>
@@ -34,6 +41,7 @@
           <svg viewBox="0 0 24 24"><path d="M4 5h16v14H4z"/><path d="M8 3v4M16 3v4M4 10h16"/></svg>
           <span>运行记录</span>
         </button>
+        </div>
       </nav>
 
       <div class="sidebar-bottom">
@@ -49,17 +57,17 @@
         </button>
         <div class="topbar-context">
           <span class="eyebrow">研究工作台</span>
-          <strong id="pageTitle">研究总览</strong>
+          <strong id="pageTitle">策略总览</strong>
         </div>
         <div class="topbar-actions">
-          <label class="run-select-wrap" title="切换运行记录">
+          <label class="run-select-wrap strategy-control hidden" title="切换运行记录">
             <span>数据批次</span>
             <select id="runSelect" aria-label="选择运行记录"></select>
           </label>
-          <button class="icon-button" id="refreshButton" title="刷新数据">
+          <button class="icon-button strategy-control hidden" id="refreshButton" title="刷新数据">
             <svg viewBox="0 0 24 24"><path d="M20 6v5h-5"/><path d="M19 11a7 7 0 1 0 .2 5"/></svg>
           </button>
-          <button class="primary-button" id="newScreenButton">
+          <button class="primary-button strategy-control hidden" id="newScreenButton">
             <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
             启动新筛选
           </button>
@@ -68,7 +76,20 @@
 
       <div class="loading-bar" id="loadingBar"></div>
 
-      <section class="page active" id="page-overview">
+      <section class="page active" id="page-home">
+        <div class="page-heading strategy-home-heading">
+          <div><span class="overline">STRATEGY PORTFOLIO</span><h1>选股策略总览</h1><p>集中查看不同策略的定位、运行状态与候选产出，再进入独立策略工作台。</p></div>
+          <div class="strategy-count-chip"><span>已接入策略</span><strong id="strategyCount">—</strong></div>
+        </div>
+        <div class="strategy-platform-summary panel">
+          <div><span class="panel-kicker">RESEARCH ARCHITECTURE</span><h2>策略相互独立，共享可信基础设施</h2><p>数据、执行与任务观测由平台统一提供；选股规则、结果投影和展示模块由每个策略自行维护。</p></div>
+          <div class="architecture-flow"><span>数据层</span><i>→</i><span>策略层</span><i>→</i><span>执行层</span><i>→</i><span>展示层</span></div>
+        </div>
+        <div class="strategy-grid" id="strategyGrid"></div>
+        <div class="empty-state panel hidden" id="strategyEmpty"><h3>暂未接入选股策略</h3><p>注册策略模块后会自动出现在这里。</p></div>
+      </section>
+
+      <section class="page strategy-page" data-strategy-page="golden-pit" id="page-overview">
         <div class="page-heading">
           <div><span class="overline">MARKET RESEARCH DESK</span><h1>黄金坑研究总览</h1><p id="overviewSubtitle">正在载入本地工作流…</p></div>
           <div class="as-of-chip"><span>研究时点</span><strong id="asOfDate">—</strong></div>
@@ -98,7 +119,7 @@
         </article>
       </section>
 
-      <section class="page" id="page-candidates">
+      <section class="page strategy-page" data-strategy-page="golden-pit" id="page-candidates">
         <div class="page-heading compact"><div><span class="overline">CANDIDATE RADAR</span><h1>候选雷达</h1><p>逐项核对估值、分红、增长趋势与阶段结论。</p></div></div>
         <div class="candidate-toolbar panel">
           <div class="toolbar-primary"><div class="search-box"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg><input id="candidateSearch" placeholder="搜索公司名称或股票代码"></div><div class="toolbar-result"><span class="active-filter-count hidden" id="activeFilterCount">0 项筛选</span><span class="result-count" id="candidateCount">0 条结果</span><button class="reset-filters hidden" id="resetFilters"><svg viewBox="0 0 24 24"><path d="M4 7h16M7 12h10M10 17h4"/></svg>重置</button></div></div>
@@ -114,13 +135,13 @@
         <article class="panel candidates-panel full"><div class="table-wrap"><table><thead><tr><th>公司 / 代码</th><th>Stage A</th><th>数据状态</th><th><button class="sort-header" data-sort="pe_ttm">PE (TTM)<span class="sort-icon">↕</span></button></th><th><button class="sort-header" data-sort="dividend_yield">股息率<span class="sort-icon">↕</span></button></th><th>Stage B</th><th>Stage C</th><th></th></tr></thead><tbody id="allCandidates"></tbody></table></div><div class="empty-state hidden" id="candidateEmpty"><h3>没有符合当前条件的记录</h3><p>尝试调整列筛选条件，或一键重置全部筛选。</p></div></article>
       </section>
 
-      <section class="page" id="page-quality">
+      <section class="page strategy-page" data-strategy-page="golden-pit" id="page-quality">
         <div class="page-heading compact"><div><span class="overline">DATA GOVERNANCE</span><h1>数据质量</h1><p>来源能力、字段覆盖和阻断性问题独立于业务结论展示。</p></div><div class="quality-gate" id="qualityGate"><span class="health-dot"></span><div><span>质量闸门</span><strong>—</strong></div></div></div>
         <div class="quality-summary" id="qualitySummary"></div>
         <article class="panel"><div class="panel-header"><div><span class="panel-kicker">SOURCE ASSESSMENT</span><h2>来源评估记录</h2></div></div><div class="quality-list" id="qualityList"></div><div class="empty-state hidden" id="qualityEmpty"><h3>暂无质量评估记录</h3><p>运行 Stage A 后会自动生成来源能力和质量检查。</p></div></article>
       </section>
 
-      <section class="page" id="page-runs">
+      <section class="page strategy-page" data-strategy-page="golden-pit" id="page-runs">
         <div class="page-heading compact"><div><span class="overline">RUN HISTORY</span><h1>运行记录</h1><p>查看不同研究时点的筛选范围、状态与完成时间。</p></div></div>
         <div class="run-list" id="runList"></div><div class="empty-state panel hidden" id="runsEmpty"><h3>还没有运行记录</h3><p>从右上角启动第一次点时筛选。</p></div>
         <article class="panel jobs-panel hidden" id="jobsPanel"><div class="panel-header"><div><span class="panel-kicker">BACKGROUND JOBS</span><h2>后台任务</h2></div></div><div id="jobList"></div></article>
@@ -157,5 +178,6 @@
 
   <div class="toast-stack" id="toastStack" aria-live="polite"></div>
   <script src="/app.js" defer></script>
+  <script src="/strategies/golden-pit.js" defer></script>
 </body>
 </html>

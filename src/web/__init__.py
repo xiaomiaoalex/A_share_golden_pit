@@ -1,4 +1,4 @@
-"""Local web console for the formal Stage A/B/C workflow."""
+"""Local multi-strategy research console."""
 
 from .server import run_server
 
