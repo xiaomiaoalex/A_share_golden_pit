@@ -4,16 +4,6 @@
 提供数据库管理、ORM模型定义和数据访问对象。
 """
 
-from .database import DatabaseManager
-from .models import (
-    Base,
-    FinancialData,
-    RiskCheckResult,
-    ScreeningResult,
-    Stock,
-    ValuationSnapshot,
-)
-
 __all__ = [
     "DatabaseManager",
     "Base",
@@ -23,3 +13,24 @@ __all__ = [
     "ScreeningResult",
     "RiskCheckResult",
 ]
+
+
+def __getattr__(name):
+    """延迟加载旧ORM；Tier1 v2的sqlite仓储不依赖SQLAlchemy。"""
+    if name == "DatabaseManager":
+        from .database import DatabaseManager
+
+        return DatabaseManager
+    model_names = {
+        "Base",
+        "Stock",
+        "FinancialData",
+        "ValuationSnapshot",
+        "ScreeningResult",
+        "RiskCheckResult",
+    }
+    if name in model_names:
+        from . import models
+
+        return getattr(models, name)
+    raise AttributeError(name)

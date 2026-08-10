@@ -13,10 +13,11 @@ A股黄金坑股票数据库 - CLI主入口
 
 import argparse
 import logging
+import re
 import sys
 import time
 from pathlib import Path
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 import pandas as pd
 
@@ -26,30 +27,40 @@ sys.path.insert(0, str(Path(__file__).parent))
 from config.settings import settings
 from config.thresholds import RadarThreshold, DeepScreenThreshold, CoreConfirmThreshold
 
-from src.data.cache import CacheManager
-from src.data.fetcher import DataFetcher
-from src.screening.radar import RadarScanner
-from src.screening.deep_screen import DeepScreener
-from src.screening.core_confirm import CoreConfirmer
-from src.valuation.historical import HistoricalValuation
-from src.valuation.scenarios import ScenarioValuation
-from src.valuation.reverse_dcf import ReverseDCF
-from src.valuation.odds_calculator import OddsCalculator
-from src.expectation.implied_profit import ImpliedProfitCalculator
-from src.expectation.pessimistic import PessimisticHypothesis
-from src.expectation.gap_quantifier import ExpectationGapQuantifier
-from src.scoring.dimensions import DimensionScorer
-from src.scoring.aggregator import ScoreAggregator
-from src.risk.ashares_risk import AShareRiskChecker
-from src.risk.financial_redflags import FinancialRedFlagDetector
-from src.risk.falsification import FalsificationGenerator
-from src.storage.database import DatabaseManager
-from src.storage.dao import StockDAO
-from src.report.excel_report import ExcelReporter
-from src.report.html_dashboard import HTMLDashboard
-from src.report.stock_detail import StockDetailReport
-
 logger = logging.getLogger(__name__)
+
+
+def _load_legacy_components():
+    """仅在调用旧三层命令时加载旧系统及其可选依赖。"""
+    global CacheManager, DataFetcher, RadarScanner, DeepScreener, CoreConfirmer
+    global HistoricalValuation, ScenarioValuation, ReverseDCF, OddsCalculator
+    global ImpliedProfitCalculator, PessimisticHypothesis, ExpectationGapQuantifier
+    global DimensionScorer, ScoreAggregator, AShareRiskChecker
+    global FinancialRedFlagDetector, FalsificationGenerator, DatabaseManager
+    global StockDAO, ExcelReporter, HTMLDashboard, StockDetailReport
+
+    from src.data.cache import CacheManager
+    from src.data.fetcher import DataFetcher
+    from src.screening.radar import RadarScanner
+    from src.screening.deep_screen import DeepScreener
+    from src.screening.core_confirm import CoreConfirmer
+    from src.valuation.historical import HistoricalValuation
+    from src.valuation.scenarios import ScenarioValuation
+    from src.valuation.reverse_dcf import ReverseDCF
+    from src.valuation.odds_calculator import OddsCalculator
+    from src.expectation.implied_profit import ImpliedProfitCalculator
+    from src.expectation.pessimistic import PessimisticHypothesis
+    from src.expectation.gap_quantifier import ExpectationGapQuantifier
+    from src.scoring.dimensions import DimensionScorer
+    from src.scoring.aggregator import ScoreAggregator
+    from src.risk.ashares_risk import AShareRiskChecker
+    from src.risk.financial_redflags import FinancialRedFlagDetector
+    from src.risk.falsification import FalsificationGenerator
+    from src.storage.database import DatabaseManager
+    from src.storage.dao import StockDAO
+    from src.report.excel_report import ExcelReporter
+    from src.report.html_dashboard import HTMLDashboard
+    from src.report.stock_detail import StockDetailReport
 
 
 def setup_logging():
@@ -216,7 +227,7 @@ class GoldenPitApp:
         # 获取基础数据
         stock_list = self.fetcher.get_stock_list()
         if stock_list.empty:
-            logger.error(f"无法获取股票列表")
+            logger.error("无法获取股票列表")
             return {'error': '无法获取股票列表，请检查网络后重试'}
         
         # 支持多种symbol格式匹配
@@ -430,6 +441,8 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例:
+  python main.py screen-tier1 --as-of 2026-08-10 --symbols 000651 600519
+  python main.py show-tier1 --run-id RUN_ID
   python main.py scan                  # 全量三层扫描
   python main.py scan --quick          # 快速扫描（仅Tier1）
   python main.py stock 000002          # 分析万科A
@@ -440,6 +453,28 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     subparsers = parser.add_subparsers(dest='command', help='可用命令')
+
+    # Stage A 独立命令；不加载或调用旧Tier2/Tier3。
+    tier1_parser = subparsers.add_parser(
+        'screen-tier1', help='执行严格、点时、fail-closed的Tier1 v2筛选'
+    )
+    tier1_parser.add_argument('--as-of', required=True, help='筛选日期 YYYY-MM-DD')
+    tier1_parser.add_argument('--symbols', nargs='+', help='可选股票代码列表')
+    tier1_parser.add_argument(
+        '--universe-file', help='可选CSV股票池，需含symbol/stock_code/code列'
+    )
+    tier1_parser.add_argument('--limit', type=int, help='仅处理前N只，供人工验收')
+    tier1_parser.add_argument('--db', default=str(settings.DB_PATH), help='SQLite数据库路径')
+
+    show_tier1_parser = subparsers.add_parser('show-tier1', help='查看Tier1 v2某次运行结果')
+    show_tier1_parser.add_argument('--run-id', required=True, help='筛选运行ID')
+    show_tier1_parser.add_argument('--db', default=str(settings.DB_PATH), help='SQLite数据库路径')
+
+    migrate_tier1_parser = subparsers.add_parser(
+        'tier1-migrate', help='应用或回滚Stage A新增表迁移'
+    )
+    migrate_tier1_parser.add_argument('--rollback', action='store_true', help='仅删除Stage A新增表')
+    migrate_tier1_parser.add_argument('--db', default=str(settings.DB_PATH), help='SQLite数据库路径')
 
     # scan 命令
     scan_parser = subparsers.add_parser('scan', help='执行全量扫描')
@@ -461,9 +496,138 @@ def build_parser() -> argparse.ArgumentParser:
                                default='all', help='报告格式')
 
     # stats 命令
-    stats_parser = subparsers.add_parser('stats', help='数据库统计信息')
+    subparsers.add_parser('stats', help='数据库统计信息')
 
     return parser
+
+
+def _parse_as_of(value: str) -> date:
+    try:
+        return date.fromisoformat(value)
+    except ValueError as exc:
+        raise ValueError("--as-of 必须是有效的 YYYY-MM-DD 日期") from exc
+
+
+def _normalize_symbol(value: object) -> str:
+    raw = str(value).strip().upper()
+    if raw.endswith((".SH", ".SZ", ".BJ")):
+        raw = raw[:-3]
+    for prefix in ("SH", "SZ", "BJ"):
+        if raw.startswith(prefix):
+            raw = raw[len(prefix):]
+            break
+    if not re.fullmatch(r"\d{1,6}", raw):
+        raise ValueError(f"无效股票代码: {value}")
+    return raw.zfill(6)
+
+
+def _load_universe_file(path: str):
+    from src.data.point_in_time.contracts import UniverseItem
+    from src.data.point_in_time.akshare_adapter import AKSharePointInTimeProvider
+
+    frame = pd.read_csv(path, dtype=str)
+    columns = {str(column).strip().lower(): column for column in frame.columns}
+    symbol_column = next(
+        (columns[key] for key in ('symbol', 'stock_code', 'code') if key in columns),
+        None,
+    )
+    if symbol_column is None:
+        raise ValueError("股票池CSV缺少 symbol、stock_code 或 code 列")
+    name_column = next(
+        (columns[key] for key in ('name', 'stock_name') if key in columns), None
+    )
+    exchange_column = columns.get('exchange')
+    items = []
+    seen = set()
+    for _, row in frame.iterrows():
+        raw_symbol = str(row[symbol_column]).strip()
+        if not raw_symbol or raw_symbol.lower() == 'nan':
+            continue
+        symbol = _normalize_symbol(raw_symbol)
+        if symbol in seen:
+            continue
+        seen.add(symbol)
+        name = str(row[name_column]).strip() if name_column else symbol
+        if not name or name.lower() == 'nan':
+            name = symbol
+        exchange = (
+            str(row[exchange_column]).strip().upper()
+            if exchange_column and pd.notna(row[exchange_column])
+            else AKSharePointInTimeProvider.exchange_for(symbol)
+        )
+        items.append(UniverseItem(symbol=symbol, name=name, exchange=exchange))
+    if not items:
+        raise ValueError("股票池CSV没有有效股票代码")
+    return items
+
+
+def _run_tier1_command(args) -> None:
+    from src.data.point_in_time.akshare_adapter import AKSharePointInTimeProvider
+    from src.screening.tier1_v2.pipeline import Tier1Pipeline
+    from src.storage.tier1_repository import Tier1Repository
+
+    as_of_date = _parse_as_of(args.as_of)
+    repository = Tier1Repository(args.db)
+    from config.tier1 import Tier1Config
+
+    tier1_config = Tier1Config()
+    provider = AKSharePointInTimeProvider(
+        current_window_days=tier1_config.current_supplier_window_days
+    )
+    if as_of_date > provider.today:
+        raise ValueError("--as-of 不得晚于当前日期")
+    historical = (
+        as_of_date
+        < provider.today - timedelta(days=tier1_config.current_supplier_window_days)
+    )
+    if historical and not args.universe_file and not args.symbols:
+        raise ValueError(
+            "历史全市场筛选必须通过--universe-file提供点时股票池；"
+            "也可用--symbols做指定股票历史复算"
+        )
+    universe_items = _load_universe_file(args.universe_file) if args.universe_file else None
+    symbols = [_normalize_symbol(value) for value in args.symbols] if args.symbols else None
+    result = Tier1Pipeline(provider, repository, tier1_config).run(
+        as_of_date,
+        symbols=symbols,
+        universe_items=universe_items,
+        limit=args.limit,
+    )
+    print(f"run_id: {result['run_id']}")
+    print(f"status: {result['status']}")
+    print(f"universe_size: {result.get('universe_size', 0)}")
+    print(f"summary: {result.get('summary', {})}")
+    if result.get('errors'):
+        print(f"errors: {result['errors']}")
+
+
+def _show_tier1_command(args) -> None:
+    from src.storage.tier1_repository import Tier1Repository
+
+    rows = Tier1Repository(args.db).decisions(args.run_id)
+    if not rows:
+        print("未找到该run_id的Tier1 v2结果")
+        return
+    columns = [
+        'symbol', 'stock_name', 'screen_status', 'business_status', 'data_status',
+        'selected_pe_ttm', 'dividend_yield_ttm', 'trend_quarters_json',
+        'revenue_yoy_sequence_json', 'parent_np_yoy_sequence_json',
+        'failed_conditions_json', 'pending_fields_json', 'error_fields_json',
+        'secondary_queues_json',
+    ]
+    print(pd.DataFrame(rows)[columns].to_string(index=False))
+
+
+def _migrate_tier1_command(args) -> None:
+    from src.storage.tier1_repository import Tier1Repository
+
+    repository = Tier1Repository(args.db)
+    if args.rollback:
+        repository.rollback_stage_a()
+        print(f"已回滚Stage A新增表: {args.db}")
+    else:
+        repository.migrate()
+        print(f"已应用Stage A迁移: {args.db}")
 
 
 def main():
@@ -476,13 +640,27 @@ def main():
         parser.print_help()
         return
 
+    try:
+        if args.command == 'screen-tier1':
+            _run_tier1_command(args)
+            return
+        if args.command == 'show-tier1':
+            _show_tier1_command(args)
+            return
+        if args.command == 'tier1-migrate':
+            _migrate_tier1_command(args)
+            return
+    except (ValueError, OSError) as exc:
+        parser.error(str(exc))
+
+    _load_legacy_components()
     app = GoldenPitApp()
 
     try:
         if args.command == 'scan':
             print("\n开始执行A股黄金坑全量扫描...\n")
             result = app.run_full_scan()
-            print(f"\n扫描完成!")
+            print("\n扫描完成!")
             print(f"   Tier1 雷达池: {result.get('tier1_count', 0)} 只")
             print(f"   Tier2 观察池: {result.get('tier2_count', 0)} 只")
             print(f"   Tier3 核心黄金坑: {result.get('tier3_count', 0)} 只")
@@ -498,7 +676,7 @@ def main():
             else:
                 agg = result.get('aggregated', {})
                 odds = result.get('odds', {})
-                print(f"\n分析完成!")
+                print("\n分析完成!")
                 print(f"   综合评分: {agg.get('total_score', 0):.1f}/10")
                 print(f"   评级: {agg.get('rating', 'N/A')}")
                 print(f"   赔率: {odds.get('odds_ratio', 0):.2f}x")

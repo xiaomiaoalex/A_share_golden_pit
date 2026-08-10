@@ -6,6 +6,44 @@
 
 ---
 
+## 阶段A：Tier1 v2严格筛选（当前正式入口）
+
+Tier1 v2已经与旧三层调用链隔离。它只在五项硬条件全部明确成立时输出
+`PASS`：
+
+1. 点时 `PE(TTM) < 15`；
+2. 税前、已实施、按公司行动调整后的 `股息率(TTM) > 5%`；
+3. 最近3个连续单季度的营业收入同比严格逐季改善；
+4. 同一窗口的归母净利润同比严格逐季改善；
+5. 截至筛选日不属于ST、*ST或其他风险警示股票。
+
+业务状态和数据状态分开保存。缺字段为 `PENDING_DATA`，接口或Schema失败为
+`DATA_ERROR`；已知硬条件失败时仍为业务 `FAIL`，同时保留
+`PARTIAL/ERROR` 数据状态。利润同比窗口任一上年同期归母净利润小于等于0，
+进入 `TURNAROUND_WATCHLIST`，不会混入正式雷达池。
+
+```bash
+# 当前或指定股票筛选
+python main.py screen-tier1 --as-of 2026-08-10 --symbols 000651 600519
+
+# 历史全市场回扫必须提供当时的点时股票池，避免幸存者偏差
+python main.py screen-tier1 --as-of 2020-12-31 --universe-file universe_20201231.csv
+
+# 查看结果、应用迁移、回滚Stage A新增表
+python main.py show-tier1 --run-id RUN_ID
+python main.py tier1-migrate
+python main.py tier1-migrate --rollback
+```
+
+历史股票池CSV至少包含 `symbol`、`stock_code` 或 `code` 之一，可选
+`name/stock_name` 和 `exchange`。详细口径、数据库表和已知数据边界见
+[`docs/stage_a_tier1_v2.md`](docs/stage_a_tier1_v2.md)。
+
+> 下文原三层命令仍保留用于兼容，但其Tier1不是本次重构后的正式入口；
+> 阶段B、C完成前不会由Tier1 v2自动调用。
+
+---
+
 ## 系统架构
 
 ```
