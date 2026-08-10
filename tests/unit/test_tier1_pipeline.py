@@ -120,6 +120,12 @@ def test_pipeline_pass_persists_raw_series_lineage_and_decision(tmp_path):
         assert (
             connection.execute("SELECT COUNT(*) FROM source_lineage").fetchone()[0] >= 4
         )
+        assert connection.execute(
+            "SELECT COUNT(*) FROM screening_run_universe"
+        ).fetchone()[0] == 1
+        assert connection.execute(
+            "SELECT status FROM tier1_item_attempts"
+        ).fetchone()[0] == "COMPLETED"
 
 
 def test_known_pe_fail_short_circuits_but_keeps_partial_data_state(tmp_path):
@@ -171,3 +177,168 @@ def test_quality_gate_blocks_future_market_data_and_preserves_run(tmp_path):
         ).fetchone()
     assert observation["fetch_status"] == "SUCCESS"
     assert assessment["blocking"] == 1
+
+
+def test_resume_skips_completed_and_runs_symbol_without_decision(tmp_path):
+    provider = SyntheticProvider()
+    repository = Tier1Repository(tmp_path / "resume.db")
+    pipeline = Tier1Pipeline(provider, repository)
+    result = pipeline.run(
+        date(2026, 8, 10),
+        universe_items=[
+            UniverseItem("000001", "甲公司", "SZ"),
+            UniverseItem("000002", "乙公司", "SZ"),
+        ],
+    )
+    run_id = result["run_id"]
+    with repository.connect() as connection:
+        connection.execute(
+            "DELETE FROM tier1_decisions WHERE run_id=? AND symbol='000002'",
+            (run_id,),
+        )
+        connection.execute(
+            """
+            UPDATE screening_run_universe
+            SET item_status='PENDING'
+            WHERE run_id=? AND symbol='000002'
+            """,
+            (run_id,),
+        )
+        connection.execute(
+            "UPDATE screening_runs SET status='INTERRUPTED' WHERE run_id=?",
+            (run_id,),
+        )
+    provider.calls.clear()
+
+    resumed = pipeline.resume(run_id, mode="unfinished")
+
+    assert resumed["processed_count"] == 1
+    assert len(repository.decisions(run_id)) == 2
+    assert provider.calls == ["market", "financial", "dividend", "risk"]
+    with repository.connect() as connection:
+        trigger = connection.execute(
+            """
+            SELECT trigger_type FROM tier1_item_attempts
+            WHERE run_id=? AND symbol='000002' ORDER BY attempt_no DESC LIMIT 1
+            """,
+            (run_id,),
+        ).fetchone()[0]
+    assert trigger == "RESUME"
+
+
+def test_data_retry_reprocesses_data_error_but_not_normal_fail(tmp_path):
+    class FinancialErrorProvider(SyntheticProvider):
+        def get_financial_facts(self, symbol, as_of_date):
+            self.calls.append("financial")
+            return DataEnvelope(
+                status=FetchStatus.ERROR,
+                data=None,
+                provider="synthetic",
+                endpoint="financial",
+                request={},
+                error_type="TimeoutError",
+                error_message="temporary",
+            )
+
+    repository = Tier1Repository(tmp_path / "retry-data.db")
+    failing = FinancialErrorProvider()
+    result = Tier1Pipeline(failing, repository).run(
+        date(2026, 8, 10),
+        universe_items=[UniverseItem("000001", "测试股份", "SZ")],
+    )
+    run_id = result["run_id"]
+    assert repository.decisions(run_id)[0]["screen_status"] == "DATA_ERROR"
+
+    healthy = SyntheticProvider()
+    retried = Tier1Pipeline(healthy, repository).resume(run_id, mode="data_gaps")
+
+    assert retried["processed_count"] == 1
+    assert repository.decisions(run_id)[0]["screen_status"] == "PASS"
+    with repository.connect() as connection:
+        trigger = connection.execute(
+            """
+            SELECT trigger_type FROM tier1_item_attempts
+            WHERE run_id=? ORDER BY attempt_no DESC LIMIT 1
+            """,
+            (run_id,),
+        ).fetchone()[0]
+    assert trigger == "DATA_RETRY"
+
+
+def test_keyboard_interrupt_marks_run_and_item_recoverable(tmp_path):
+    class InterruptingProvider(SyntheticProvider):
+        def get_market_snapshot(self, symbol, as_of_date):
+            raise KeyboardInterrupt("operator stop")
+
+    repository = Tier1Repository(tmp_path / "interrupt.db")
+    try:
+        Tier1Pipeline(InterruptingProvider(), repository).run(
+            date(2026, 8, 10),
+            universe_items=[UniverseItem("000001", "测试股份", "SZ")],
+        )
+    except KeyboardInterrupt:
+        pass
+    else:
+        raise AssertionError("expected KeyboardInterrupt")
+
+    with repository.connect() as connection:
+        run = connection.execute("SELECT status FROM screening_runs").fetchone()
+        item = connection.execute(
+            "SELECT item_status FROM screening_run_universe"
+        ).fetchone()
+        lease_count = connection.execute(
+            "SELECT COUNT(*) FROM screening_run_leases"
+        ).fetchone()[0]
+    assert run["status"] == "INTERRUPTED"
+    assert item["item_status"] == "RETRYABLE_FAILED"
+    assert lease_count == 0
+
+
+def test_legacy_run_reconstructs_validated_universe_before_resume(tmp_path):
+    class UniverseProvider(SyntheticProvider):
+        def get_universe(self, as_of_date):
+            return success(
+                [
+                    UniverseItem("000001", "甲公司", "SZ"),
+                    UniverseItem("000002", "乙公司", "SZ"),
+                ],
+                "universe",
+            )
+
+    provider = UniverseProvider()
+    repository = Tier1Repository(tmp_path / "legacy-resume.db")
+    pipeline = Tier1Pipeline(provider, repository)
+    result = pipeline.run(
+        date(2026, 8, 10),
+        universe_items=[
+            UniverseItem("000001", "甲公司", "SZ"),
+            UniverseItem("000002", "乙公司", "SZ"),
+        ],
+    )
+    run_id = result["run_id"]
+    with repository.connect() as connection:
+        connection.execute("DELETE FROM tier1_item_attempts WHERE run_id=?", (run_id,))
+        connection.execute("DELETE FROM screening_run_universe WHERE run_id=?", (run_id,))
+        connection.execute(
+            "DELETE FROM screening_universe_snapshots WHERE run_id=?", (run_id,)
+        )
+        connection.execute(
+            "DELETE FROM tier1_decisions WHERE run_id=? AND symbol='000002'",
+            (run_id,),
+        )
+        connection.execute(
+            "UPDATE screening_runs SET status='INTERRUPTED' WHERE run_id=?",
+            (run_id,),
+        )
+
+    resumed = pipeline.resume(run_id, mode="unfinished")
+
+    assert resumed["processed_count"] == 1
+    assert repository.has_run_universe(run_id) is True
+    assert len(repository.decisions(run_id)) == 2
+    with repository.connect() as connection:
+        snapshot_source = connection.execute(
+            "SELECT snapshot_source FROM screening_universe_snapshots WHERE run_id=?",
+            (run_id,),
+        ).fetchone()[0]
+    assert snapshot_source == "RECONSTRUCTED_LEGACY"

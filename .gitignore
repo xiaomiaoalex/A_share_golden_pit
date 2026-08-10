@@ -19,6 +19,8 @@ data/cache/*.pkl
 
 # 数据库文件
 data/db/*.db
+data/db/*.db-shm
+data/db/*.db-wal
 !data/db/.gitkeep
 
 # 日志

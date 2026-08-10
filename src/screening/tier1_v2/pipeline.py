@@ -55,7 +55,6 @@ class Tier1Pipeline:
     ) -> dict:
         run_id = self.repository.begin_run(as_of_date, self.config)
         run_errors: list[str] = []
-        price_dates: list[date] = []
 
         if universe_items is not None:
             universe = list(universe_items)
@@ -138,61 +137,169 @@ class Tier1Pipeline:
         universe = list(normalized_universe.data)
         if limit is not None:
             universe = universe[: max(0, limit)]
-
-        for index, item in enumerate(universe, start=1):
-            try:
-                decision = self._screen_stock(run_id, item, as_of_date)
-                self.repository.save_decision(run_id, decision)
-                if decision.price_date:
-                    price_dates.append(decision.price_date)
-                logger.info(
-                    "Tier1 v2 %s/%s %s %s/%s",
-                    index,
-                    len(universe),
-                    item.symbol,
-                    decision.screen_status,
-                    decision.data_status.value,
-                )
-            except Exception as exc:
-                logger.exception("Tier1 v2 单股处理失败 %s", item.symbol)
-                run_errors.append(f"{item.symbol}: {type(exc).__name__}: {exc}")
-                decision = evaluate_tier1(
-                    DecisionInput(
-                        symbol=item.symbol,
-                        stock_name=item.name,
-                        as_of_date=as_of_date,
-                        price_date=None,
-                        selected_pe_ttm=None,
-                        supplier_pe_ttm=None,
-                        self_pe_ttm=None,
-                        pe_selection_method=None,
-                        dividend_yield_ttm=None,
-                        dividend_ttm_raw_per_share=None,
-                        dividend_ttm_adjusted_per_share=None,
-                        risk_warning=None,
-                        quarterly_window=[],
-                        error_fields=["pipeline"],
-                    ),
-                    self.config,
-                )
-                self.repository.save_decision(run_id, decision)
-
-        run_status = "FINISHED_WITH_ERRORS" if run_errors else "FINISHED"
-        self.repository.finish_run(
-            run_id,
-            status=run_status,
-            universe_size=len(universe),
-            price_dates=price_dates,
-            errors=run_errors,
+        self.repository.save_run_universe(run_id, universe, snapshot_source="CAPTURED")
+        worker_token = self.repository.acquire_run_lease(
+            run_id, allow_recent_activity=True
         )
-        return {
-            "run_id": run_id,
-            "status": run_status,
-            "universe_size": len(universe),
-            "summary": self.repository.summary(run_id),
-            "data_quality": self.repository.quality_summary(run_id),
-            "errors": run_errors,
-        }
+        return self._process_items(
+            run_id,
+            as_of_date,
+            universe,
+            trigger_type="INITIAL",
+            worker_token=worker_token,
+            prior_errors=run_errors,
+        )
+
+    def resume(
+        self,
+        run_id: str,
+        *,
+        mode: str = "unfinished",
+        symbols: Optional[Iterable[str]] = None,
+    ) -> dict:
+        """Resume unfinished work or retry evidence-deficient symbols in-place."""
+        run = self.repository.run_record(run_id)
+        if run is None:
+            raise ValueError(f"未知Tier1 run_id: {run_id}")
+        if str(run["calculation_version"]) != self.config.calculation_version:
+            raise ValueError("运行计算版本与当前代码不一致，禁止混合口径续跑")
+        as_of_date = date.fromisoformat(str(run["as_of_date"]))
+        if not self.repository.has_run_universe(run_id):
+            envelope = self.provider.get_universe(as_of_date)
+            envelope, _ = self._record_and_gate(
+                run_id, None, "universe", envelope, as_of_date
+            )
+            if not envelope.usable:
+                raise ValueError("旧运行缺少股票池快照，且无法从原时点重建")
+            reconstructed = list(envelope.data)
+            expected = self.repository.legacy_universe_size(run_id)
+            reconstructed_symbols = {item.symbol for item in reconstructed}
+            known_symbols = self.repository.decision_symbols(run_id)
+            if (
+                expected is None
+                or len(reconstructed) != expected
+                or not known_symbols.issubset(reconstructed_symbols)
+            ):
+                raise ValueError(
+                    "旧运行股票池无法通过数量及已处理代码校验，禁止不精确续跑："
+                    f"记录={expected}，重建={len(reconstructed)}，"
+                    f"不匹配已处理代码={len(known_symbols - reconstructed_symbols)}"
+                )
+            self.repository.save_run_universe(
+                run_id, reconstructed, snapshot_source="RECONSTRUCTED_LEGACY"
+            )
+            self.repository.backfill_run_universe_progress(run_id)
+
+        worker_token = self.repository.acquire_run_lease(run_id)
+        targets = self.repository.resume_targets(
+            run_id, mode=mode, symbols=symbols
+        )
+        return self._process_items(
+            run_id,
+            as_of_date,
+            targets,
+            trigger_type="RESUME" if mode == "unfinished" else "DATA_RETRY",
+            worker_token=worker_token,
+            prior_errors=[],
+        )
+
+    def _process_items(
+        self,
+        run_id: str,
+        as_of_date: date,
+        universe: list[UniverseItem],
+        *,
+        trigger_type: str,
+        worker_token: str,
+        prior_errors: list[str],
+    ) -> dict:
+        run_errors = list(prior_errors)
+        try:
+            for index, item in enumerate(universe, start=1):
+                self.repository.heartbeat_run_lease(run_id, worker_token)
+                attempt_id = self.repository.begin_item_attempt(
+                    run_id, item.symbol, trigger_type
+                )
+                attempt_error = None
+                decision = None
+                try:
+                    decision = self._screen_stock(run_id, item, as_of_date)
+                    self.repository.save_decision(run_id, decision)
+                    logger.info(
+                        "Tier1 v2 %s/%s %s %s/%s trigger=%s",
+                        index,
+                        len(universe),
+                        item.symbol,
+                        decision.screen_status,
+                        decision.data_status.value,
+                        trigger_type,
+                    )
+                except Exception as exc:
+                    attempt_error = exc
+                    logger.exception("Tier1 v2 单股处理失败 %s", item.symbol)
+                    run_errors.append(
+                        f"{item.symbol}: {type(exc).__name__}: {exc}"
+                    )
+                    decision = evaluate_tier1(
+                        DecisionInput(
+                            symbol=item.symbol,
+                            stock_name=item.name,
+                            as_of_date=as_of_date,
+                            price_date=None,
+                            selected_pe_ttm=None,
+                            supplier_pe_ttm=None,
+                            self_pe_ttm=None,
+                            pe_selection_method=None,
+                            dividend_yield_ttm=None,
+                            dividend_ttm_raw_per_share=None,
+                            dividend_ttm_adjusted_per_share=None,
+                            risk_warning=None,
+                            quarterly_window=[],
+                            error_fields=["pipeline"],
+                        ),
+                        self.config,
+                    )
+                    self.repository.save_decision(run_id, decision)
+                except BaseException as exc:
+                    attempt_error = exc
+                    raise
+                finally:
+                    self.repository.finish_item_attempt(
+                        attempt_id,
+                        decision_status=(decision.screen_status if decision else None),
+                        data_status=(
+                            decision.data_status.value if decision else None
+                        ),
+                        error=attempt_error,
+                    )
+
+            run_status = (
+                "FINISHED_WITH_ERRORS"
+                if run_errors or self.repository.has_retryable_items(run_id)
+                else "FINISHED"
+            )
+            all_items = self.repository.load_run_universe(run_id)
+            self.repository.finish_run(
+                run_id,
+                status=run_status,
+                universe_size=len(all_items),
+                price_dates=self.repository.decision_price_dates(run_id),
+                errors=run_errors,
+            )
+            return {
+                "run_id": run_id,
+                "status": run_status,
+                "universe_size": len(all_items),
+                "processed_count": len(universe),
+                "summary": self.repository.summary(run_id),
+                "data_quality": self.repository.quality_summary(run_id),
+                "errors": run_errors,
+            }
+        except BaseException as exc:
+            self.repository.mark_run_interrupted(run_id, exc)
+            raise
+        finally:
+            self.repository.release_run_lease(run_id, worker_token)
 
     def _record_and_gate(
         self,

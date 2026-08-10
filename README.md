@@ -34,6 +34,8 @@ python main.py screen-tier1 --as-of 2020-12-31 \
   --universe-file universe_20201231.csv
 python main.py verify-tier1-sources --as-of 2026-08-10 --symbols 000651
 python main.py show-tier1 --run-id RUN_ID
+python main.py resume-tier1 --run-id RUN_ID
+python main.py retry-tier1-data --run-id RUN_ID
 ```
 
 完整口径见 [Stage A说明](docs/stage_a_tier1_v2.md)。
@@ -99,6 +101,45 @@ python main.py workflow --run-id RUN_ID
 
 `workflow` 会汇总A/B/C状态并给出下一条受控操作，不会自动越过AI研究或人工复核。
 
+## Web 研究控制台
+
+项目内置零新增依赖的本地 Web 界面，可视化查看研究漏斗、候选股详情、数据质量和
+运行记录，并可一键启动全市场筛选（或指定股票）、生成 Stage B 证据包以及提交
+Stage B/C 人工复核：
+
+```bash
+python web_app.py
+```
+
+浏览器默认打开 `http://127.0.0.1:8765`。如需指定数据库、端口或禁止自动打开浏览器：
+
+```bash
+python web_app.py --db data/db/golden_pit.db --port 9000 --no-browser
+```
+
+控制台默认仅监听本机回环地址。筛选和证据包导出在后台执行，可在“运行记录”查看
+状态；AI研究 JSON 和行业分类等正式材料仍通过对应 CLI 导入，以保留既有的严格校验
+和证据契约。
+
+### 断点续跑与数据缺口补跑
+
+Stage A 在开始逐股处理前会固化有序股票池及 SHA-256，随后为每只股票保存
+`PENDING / PROCESSING / COMPLETED / RETRYABLE_FAILED` 状态和追加式尝试记录。
+工作进程通过短期租约和心跳防止同一运行被并发处理：
+
+```bash
+# 仅处理没有完整结束或尚未产生决策的标的
+python main.py resume-tier1 --run-id RUN_ID
+
+# 仅补跑无决策、DATA_ERROR、PENDING_DATA 或异常中断的标的
+python main.py retry-tier1-data --run-id RUN_ID
+```
+
+Web 控制台会在运行停止且租约过期后显示“从断点继续”；完成运行存在数据缺口时
+显示“补跑数据缺口”。续跑沿用原 `run_id`、原配置和原股票池，不重新处理正常完成
+标的。旧版本运行没有股票池快照时，系统只会在重新获取的股票池通过原时点和数量
+校验后建立兼容快照，否则失败关闭。
+
 ## 数据源
 
 | 来源 | 正式用途 | 点时边界 |
@@ -119,6 +160,8 @@ python main.py workflow --run-id RUN_ID
 | `screen-tier1` | 执行Stage A严格筛选 |
 | `verify-tier1-sources` | 多源口径与数值交叉验证 |
 | `show-tier1` | 查看某次Stage A结果 |
+| `resume-tier1` | 使用固化股票池跳过已完成标的并断点续跑 |
+| `retry-tier1-data` | 补跑未产生决策或数据状态异常的标的 |
 | `export/import/review-tier2` | Stage B证据包、研究导入和人工确认 |
 | `export/import/review-tier3` | Stage C模板、风险导入和人工终审 |
 | `tier1/2/3-migrate` | 应用或回滚对应阶段迁移 |
@@ -134,6 +177,7 @@ src/screening/tier1_v2/         Stage A硬筛选
 src/screening/tier2_human_ai/   Stage B证据包和结论状态机
 src/risk/tier3/                 Stage C行业化风险模型
 src/storage/                    Stage A/B/C SQLite仓储
+src/web/                        本地Web控制台、API与前端静态资源
 scripts/migrations/             版本化、原子数据库迁移
 tests/                          离线业务测试和实时数据canary
 ```

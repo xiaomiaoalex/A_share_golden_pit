@@ -1,9 +1,10 @@
 import sqlite3
-from datetime import date
+from datetime import date, datetime, timedelta
 
 import pytest
 
 from config.tier1 import Tier1Config
+from src.data.point_in_time.contracts import UniverseItem
 from src.screening.tier1_v2.decision import evaluate_tier1
 from src.storage.tier1_repository import Tier1Repository
 from tests.unit.test_tier1_decision import decision_input
@@ -67,6 +68,40 @@ def test_decisions_after_rollback_returns_empty_instead_of_crashing(tmp_path):
     assert repository.decisions("missing-run") == []
 
 
+def test_expired_worker_lease_makes_processing_item_retryable(tmp_path):
+    repository = Tier1Repository(tmp_path / "lease.db")
+    run_id = repository.begin_run(date(2026, 8, 10), Tier1Config())
+    repository.save_run_universe(
+        run_id, [UniverseItem("000001", "测试股份", "SZ")]
+    )
+    first_token = repository.acquire_run_lease(
+        run_id, allow_recent_activity=True
+    )
+    repository.begin_item_attempt(run_id, "000001", "INITIAL")
+    with repository.connect() as connection:
+        connection.execute(
+            "UPDATE screening_run_leases SET lease_expires_at=? WHERE run_id=?",
+            ((datetime.now() - timedelta(seconds=1)).isoformat(), run_id),
+        )
+
+    second_token = repository.acquire_run_lease(
+        run_id, allow_recent_activity=True
+    )
+
+    assert second_token != first_token
+    with repository.connect() as connection:
+        item = connection.execute(
+            "SELECT item_status FROM screening_run_universe"
+        ).fetchone()
+        attempt = connection.execute(
+            "SELECT status, error_type FROM tier1_item_attempts"
+        ).fetchone()
+    assert item["item_status"] == "RETRYABLE_FAILED"
+    assert attempt["status"] == "FAILED"
+    assert attempt["error_type"] == "LEASE_EXPIRED"
+    repository.release_run_lease(run_id, second_token)
+
+
 def test_source_verification_report_is_persisted(tmp_path):
     repository = Tier1Repository(tmp_path / "test.db")
     report = {
@@ -116,7 +151,11 @@ def test_existing_stage_a_database_upgrades_to_quality_migration(tmp_path):
             for row in connection.execute("SELECT version FROM schema_migrations")
         }
     assert "data_quality_summary_json" in columns
-    assert versions == {"001_tier1_v2", "002_tier1_data_quality"}
+    assert versions == {
+        "001_tier1_v2",
+        "002_tier1_data_quality",
+        "005_tier1_resume",
+    }
 
 
 def test_source_verification_cannot_bind_to_mismatched_run(tmp_path):

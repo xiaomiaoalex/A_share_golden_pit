@@ -6,15 +6,22 @@ independently.
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
+import socket
 import sqlite3
 import uuid
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterable, Optional
 
 from config.tier1 import Tier1Config
-from src.data.point_in_time.contracts import DataEnvelope, DividendBundle
+from src.data.point_in_time.contracts import (
+    DataEnvelope,
+    DividendBundle,
+    UniverseItem,
+)
 from src.data.quality.types import QualityAssessment
 from src.screening.tier1_v2.contracts import (
     FinancialReportFact,
@@ -30,6 +37,11 @@ MIGRATIONS = (
         "002_tier1_data_quality",
         "002_tier1_data_quality_up.sql",
         "Tier1 business data quality assessments",
+    ),
+    (
+        "005_tier1_resume",
+        "005_tier1_resume_up.sql",
+        "Stage A resumable universe, attempts and worker leases",
     ),
 )
 MIGRATION_VERSION = MIGRATIONS[-1][0]
@@ -126,6 +138,9 @@ class Tier1Repository:
             raise
 
     def rollback_stage_a(self) -> None:
+        resume_down = (
+            self.project_root / "scripts" / "migrations" / "005_tier1_resume_down.sql"
+        )
         tier3_down = (
             self.project_root / "scripts" / "migrations" / "004_tier3_risk_filter_down.sql"
         )
@@ -145,13 +160,15 @@ class Tier1Repository:
             self._execute_scripts_atomically(
                 connection,
                 [
+                    resume_down.read_text(encoding="utf-8"),
                     tier3_down.read_text(encoding="utf-8"),
                     tier2_down.read_text(encoding="utf-8"),
                     quality_down.read_text(encoding="utf-8"),
                     down_path.read_text(encoding="utf-8"),
                     "DELETE FROM schema_migrations WHERE version IN "
                     "('001_tier1_v2','002_tier1_data_quality',"
-                    "'003_tier2_human_ai','004_tier3_risk_filter');",
+                    "'003_tier2_human_ai','004_tier3_risk_filter',"
+                    "'005_tier1_resume');",
                 ],
             )
 
@@ -214,6 +231,455 @@ class Tier1Repository:
                     run_id,
                 ),
             )
+
+    def set_run_universe_size(self, run_id: str, universe_size: int) -> None:
+        """Persist the final work-unit count before per-symbol processing starts."""
+        if universe_size < 0:
+            raise ValueError("universe_size不得为负数")
+        with self.connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE screening_runs SET universe_size=?
+                WHERE run_id=? AND status='RUNNING'
+                """,
+                (universe_size, run_id),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError(f"无法更新运行中的股票池规模: {run_id}")
+
+    def save_run_universe(
+        self,
+        run_id: str,
+        items: Iterable[UniverseItem],
+        *,
+        snapshot_source: str = "CAPTURED",
+    ) -> str:
+        """Persist an immutable, ordered universe used for exact resumption."""
+        self.migrate()
+        universe = list(items)
+        canonical = [
+            {
+                "position": position,
+                "symbol": item.symbol,
+                "stock_name": item.name,
+                "exchange": item.exchange,
+            }
+            for position, item in enumerate(universe, start=1)
+        ]
+        content = json.dumps(
+            canonical, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        )
+        content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        now = datetime.now().isoformat()
+        with self.connect() as connection:
+            existing = connection.execute(
+                "SELECT * FROM screening_universe_snapshots WHERE run_id=?",
+                (run_id,),
+            ).fetchone()
+            if existing is not None:
+                if (
+                    str(existing["content_hash"]) != content_hash
+                    or int(existing["item_count"]) != len(universe)
+                ):
+                    raise ValueError("已固化股票池与待写入股票池不一致，禁止覆盖")
+                return content_hash
+            run = connection.execute(
+                "SELECT 1 FROM screening_runs WHERE run_id=?", (run_id,)
+            ).fetchone()
+            if run is None:
+                raise ValueError(f"未知Tier1 run_id: {run_id}")
+            connection.execute(
+                """
+                INSERT INTO screening_universe_snapshots(
+                    run_id, content_hash, item_count, snapshot_source, created_at
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (run_id, content_hash, len(universe), snapshot_source, now),
+            )
+            connection.executemany(
+                """
+                INSERT INTO screening_run_universe(
+                    run_id, symbol, stock_name, exchange, position, item_status,
+                    attempt_count
+                ) VALUES (?, ?, ?, ?, ?, 'PENDING', 0)
+                """,
+                [
+                    (
+                        run_id,
+                        row["symbol"],
+                        row["stock_name"],
+                        row["exchange"],
+                        row["position"],
+                    )
+                    for row in canonical
+                ],
+            )
+            connection.execute(
+                "UPDATE screening_runs SET universe_size=? WHERE run_id=?",
+                (len(universe), run_id),
+            )
+        return content_hash
+
+    def load_run_universe(self, run_id: str) -> list[UniverseItem]:
+        self.migrate()
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT symbol, stock_name, exchange FROM screening_run_universe
+                WHERE run_id=? ORDER BY position
+                """,
+                (run_id,),
+            ).fetchall()
+        return [
+            UniverseItem(
+                symbol=str(row["symbol"]),
+                name=str(row["stock_name"]),
+                exchange=str(row["exchange"]),
+            )
+            for row in rows
+        ]
+
+    def has_run_universe(self, run_id: str) -> bool:
+        self.migrate()
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT 1 FROM screening_universe_snapshots WHERE run_id=?",
+                (run_id,),
+            ).fetchone()
+        return row is not None
+
+    def legacy_universe_size(self, run_id: str) -> int | None:
+        """Return the recorded total used to validate a reconstructed legacy snapshot."""
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT universe_size FROM screening_runs WHERE run_id=?", (run_id,)
+            ).fetchone()
+            if row is None:
+                raise ValueError(f"未知Tier1 run_id: {run_id}")
+            if row["universe_size"] is not None:
+                return int(row["universe_size"])
+            observed = connection.execute(
+                """
+                SELECT MAX(row_count) FROM source_observations
+                WHERE run_id=? AND field_group='universe'
+                  AND fetch_status='SUCCESS'
+                """,
+                (run_id,),
+            ).fetchone()[0]
+        return int(observed) if observed is not None else None
+
+    def backfill_run_universe_progress(self, run_id: str) -> None:
+        """Mark already-decided legacy symbols complete after snapshot reconstruction."""
+        with self.connect() as connection:
+            connection.execute(
+                """
+                UPDATE screening_run_universe
+                SET item_status='COMPLETED', last_trigger='INITIAL',
+                    attempt_count=CASE WHEN attempt_count=0 THEN 1 ELSE attempt_count END,
+                    last_attempt_finished_at=(
+                        SELECT d.created_at FROM tier1_decisions d
+                        WHERE d.run_id=screening_run_universe.run_id
+                          AND d.symbol=screening_run_universe.symbol
+                    )
+                WHERE run_id=? AND EXISTS (
+                    SELECT 1 FROM tier1_decisions d
+                    WHERE d.run_id=screening_run_universe.run_id
+                      AND d.symbol=screening_run_universe.symbol
+                )
+                """,
+                (run_id,),
+            )
+
+    def acquire_run_lease(
+        self,
+        run_id: str,
+        *,
+        allow_recent_activity: bool = False,
+        lease_seconds: int = 120,
+    ) -> str:
+        """Acquire exclusive ownership and reject concurrent/still-live workers."""
+        self.migrate()
+        now = datetime.now()
+        token = str(uuid.uuid4())
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            run = connection.execute(
+                "SELECT status FROM screening_runs WHERE run_id=?", (run_id,)
+            ).fetchone()
+            if run is None:
+                raise ValueError(f"未知Tier1 run_id: {run_id}")
+            lease = connection.execute(
+                "SELECT * FROM screening_run_leases WHERE run_id=?", (run_id,)
+            ).fetchone()
+            if lease is not None:
+                expiry = datetime.fromisoformat(str(lease["lease_expires_at"]))
+                if expiry > now:
+                    raise ValueError("该运行已有活动工作进程，禁止并发续跑")
+                connection.execute(
+                    "DELETE FROM screening_run_leases WHERE run_id=?", (run_id,)
+                )
+            if not allow_recent_activity and str(run["status"]) == "RUNNING":
+                recent = connection.execute(
+                    """
+                    SELECT MAX(event_at) FROM (
+                        SELECT MAX(fetched_at) AS event_at FROM source_observations
+                        WHERE run_id=?
+                        UNION ALL
+                        SELECT MAX(created_at) AS event_at FROM tier1_decisions
+                        WHERE run_id=?
+                    )
+                    """,
+                    (run_id, run_id),
+                ).fetchone()[0]
+                if recent:
+                    latest = datetime.fromisoformat(str(recent))
+                    if (now - latest).total_seconds() < lease_seconds:
+                        raise ValueError("运行仍在产生数据，请等待其停止后再续跑")
+            expiry = now + timedelta(seconds=lease_seconds)
+            connection.execute(
+                """
+                INSERT INTO screening_run_leases(
+                    run_id, worker_token, process_id, host_name, acquired_at,
+                    heartbeat_at, lease_expires_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    run_id,
+                    token,
+                    os.getpid(),
+                    socket.gethostname(),
+                    now.isoformat(),
+                    now.isoformat(),
+                    expiry.isoformat(),
+                ),
+            )
+            connection.execute(
+                """
+                UPDATE tier1_item_attempts
+                SET status='FAILED', finished_at=?, error_type='LEASE_EXPIRED',
+                    error_message='前一工作进程在完成标的前中断'
+                WHERE run_id=? AND status='RUNNING'
+                """,
+                (now.isoformat(), run_id),
+            )
+            connection.execute(
+                """
+                UPDATE screening_run_universe
+                SET item_status='RETRYABLE_FAILED',
+                    last_error_type='LEASE_EXPIRED',
+                    last_error_message='前一工作进程在完成标的前中断'
+                WHERE run_id=? AND item_status='PROCESSING'
+                """,
+                (run_id,),
+            )
+            connection.execute(
+                """
+                UPDATE screening_runs SET status='RUNNING', finished_at=NULL
+                WHERE run_id=?
+                """,
+                (run_id,),
+            )
+        return token
+
+    def heartbeat_run_lease(
+        self, run_id: str, worker_token: str, *, lease_seconds: int = 120
+    ) -> None:
+        now = datetime.now()
+        with self.connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE screening_run_leases
+                SET heartbeat_at=?, lease_expires_at=?
+                WHERE run_id=? AND worker_token=?
+                """,
+                (
+                    now.isoformat(),
+                    (now + timedelta(seconds=lease_seconds)).isoformat(),
+                    run_id,
+                    worker_token,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError("运行租约已失效，停止写入以避免并发冲突")
+
+    def release_run_lease(self, run_id: str, worker_token: str) -> None:
+        with self.connect() as connection:
+            connection.execute(
+                "DELETE FROM screening_run_leases WHERE run_id=? AND worker_token=?",
+                (run_id, worker_token),
+            )
+
+    def begin_item_attempt(self, run_id: str, symbol: str, trigger_type: str) -> str:
+        if trigger_type not in {"INITIAL", "RESUME", "DATA_RETRY"}:
+            raise ValueError(f"无效补跑触发类型: {trigger_type}")
+        attempt_id = str(uuid.uuid4())
+        now = datetime.now().isoformat()
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            item = connection.execute(
+                """
+                SELECT attempt_count FROM screening_run_universe
+                WHERE run_id=? AND symbol=?
+                """,
+                (run_id, symbol),
+            ).fetchone()
+            if item is None:
+                raise ValueError(f"股票不属于固化运行股票池: {symbol}")
+            attempt_no = int(item["attempt_count"]) + 1
+            connection.execute(
+                """
+                UPDATE screening_run_universe
+                SET item_status='PROCESSING', attempt_count=?, last_trigger=?,
+                    last_attempt_started_at=?, last_error_type=NULL,
+                    last_error_message=NULL
+                WHERE run_id=? AND symbol=?
+                """,
+                (attempt_no, trigger_type, now, run_id, symbol),
+            )
+            connection.execute(
+                """
+                INSERT INTO tier1_item_attempts(
+                    attempt_id, run_id, symbol, attempt_no, trigger_type,
+                    status, started_at
+                ) VALUES (?, ?, ?, ?, ?, 'RUNNING', ?)
+                """,
+                (attempt_id, run_id, symbol, attempt_no, trigger_type, now),
+            )
+        return attempt_id
+
+    def finish_item_attempt(
+        self,
+        attempt_id: str,
+        *,
+        decision_status: str | None = None,
+        data_status: str | None = None,
+        error: BaseException | None = None,
+    ) -> None:
+        now = datetime.now().isoformat()
+        with self.connect() as connection:
+            attempt = connection.execute(
+                "SELECT run_id, symbol FROM tier1_item_attempts WHERE attempt_id=?",
+                (attempt_id,),
+            ).fetchone()
+            if attempt is None:
+                raise ValueError(f"未知逐股尝试: {attempt_id}")
+            failed = error is not None
+            error_type = type(error).__name__ if error is not None else None
+            error_message = str(error) if error is not None else None
+            connection.execute(
+                """
+                UPDATE tier1_item_attempts
+                SET status=?, finished_at=?, error_type=?, error_message=?,
+                    decision_status=?, data_status=? WHERE attempt_id=?
+                """,
+                (
+                    "FAILED" if failed else "COMPLETED",
+                    now,
+                    error_type,
+                    error_message,
+                    decision_status,
+                    data_status,
+                    attempt_id,
+                ),
+            )
+            connection.execute(
+                """
+                UPDATE screening_run_universe
+                SET item_status=?, last_attempt_finished_at=?,
+                    last_error_type=?, last_error_message=?
+                WHERE run_id=? AND symbol=?
+                """,
+                (
+                    "RETRYABLE_FAILED" if failed else "COMPLETED",
+                    now,
+                    error_type,
+                    error_message,
+                    attempt["run_id"],
+                    attempt["symbol"],
+                ),
+            )
+
+    def resume_targets(
+        self,
+        run_id: str,
+        *,
+        mode: str,
+        symbols: Iterable[str] | None = None,
+    ) -> list[UniverseItem]:
+        if mode not in {"unfinished", "data_gaps"}:
+            raise ValueError(f"未知补跑模式: {mode}")
+        wanted = {str(item).zfill(6) for item in symbols or []}
+        where = (
+            "(u.item_status!='COMPLETED' OR d.symbol IS NULL)"
+            if mode == "unfinished"
+            else "(d.symbol IS NULL OR u.item_status='RETRYABLE_FAILED' "
+            "OR d.screen_status IN ('DATA_ERROR','PENDING_DATA'))"
+        )
+        parameters: list[Any] = [run_id]
+        symbol_clause = ""
+        if wanted:
+            placeholders = ",".join("?" for _ in wanted)
+            symbol_clause = f" AND u.symbol IN ({placeholders})"
+            parameters.extend(sorted(wanted))
+        with self.connect() as connection:
+            rows = connection.execute(
+                f"""
+                SELECT u.symbol, u.stock_name, u.exchange
+                FROM screening_run_universe u
+                LEFT JOIN tier1_decisions d
+                  ON d.run_id=u.run_id AND d.symbol=u.symbol
+                WHERE u.run_id=? AND {where}{symbol_clause}
+                ORDER BY u.position
+                """,
+                parameters,
+            ).fetchall()
+        return [
+            UniverseItem(str(row["symbol"]), str(row["stock_name"]), str(row["exchange"]))
+            for row in rows
+        ]
+
+    def mark_run_interrupted(self, run_id: str, error: BaseException) -> None:
+        with self.connect() as connection:
+            connection.execute(
+                """
+                UPDATE screening_runs SET status='INTERRUPTED', finished_at=?,
+                    error_summary_json=? WHERE run_id=?
+                """,
+                (
+                    datetime.now().isoformat(),
+                    _json([f"{type(error).__name__}: {error}"]),
+                    run_id,
+                ),
+            )
+
+    def decision_price_dates(self, run_id: str) -> list[date]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT DISTINCT price_date FROM tier1_decisions
+                WHERE run_id=? AND price_date IS NOT NULL ORDER BY price_date
+                """,
+                (run_id,),
+            ).fetchall()
+        return [date.fromisoformat(str(row["price_date"])) for row in rows]
+
+    def decision_symbols(self, run_id: str) -> set[str]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT symbol FROM tier1_decisions WHERE run_id=?", (run_id,)
+            ).fetchall()
+        return {str(row["symbol"]) for row in rows}
+
+    def has_retryable_items(self, run_id: str) -> bool:
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT 1 FROM screening_run_universe
+                WHERE run_id=? AND item_status='RETRYABLE_FAILED' LIMIT 1
+                """,
+                (run_id,),
+            ).fetchone()
+        return row is not None
 
     def save_quality_assessment(
         self,
