@@ -1,7 +1,7 @@
 """SQLite repository for Stage A Tier1 v2 data.
 
-The legacy five SQLAlchemy tables are intentionally not modified.  Stage A
-uses additive, versioned SQLite migrations and stores every run independently.
+Stage A uses additive, versioned SQLite migrations and stores every run
+independently.
 """
 
 from __future__ import annotations
@@ -23,7 +23,6 @@ from src.screening.tier1_v2.contracts import (
     Tier1Decision,
 )
 from src.screening.tier1_v2.metrics import DividendCalculation
-
 
 MIGRATIONS = (
     ("001_tier1_v2", "001_tier1_v2_up.sql", "Stage A strict Tier1 v2"),

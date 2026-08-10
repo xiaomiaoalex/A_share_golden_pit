@@ -9,7 +9,6 @@ from typing import Iterable, Optional
 
 from .contracts import FinancialReportFact, QuarterlyMetric
 
-
 _QUARTER_ENDS = {
     1: (3, 31),
     2: (6, 30),

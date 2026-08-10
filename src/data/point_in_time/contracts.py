@@ -9,7 +9,6 @@ from typing import Any, Generic, Optional, TypeVar
 
 from src.screening.tier1_v2.contracts import CorporateAction, DividendEvent
 
-
 T = TypeVar("T")
 
 

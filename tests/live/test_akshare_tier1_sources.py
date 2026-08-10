@@ -5,7 +5,6 @@ import pytest
 
 from src.data.point_in_time.akshare_adapter import AKSharePointInTimeProvider
 
-
 pytestmark = pytest.mark.live
 
 

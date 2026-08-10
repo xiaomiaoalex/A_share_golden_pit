@@ -6,7 +6,6 @@ import pytest
 from src.data.point_in_time.baostock_adapter import BaoStockPointInTimeProvider
 from src.data.point_in_time.tushare_adapter import TusharePointInTimeProvider
 
-
 pytestmark = pytest.mark.live
 
 

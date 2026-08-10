@@ -10,7 +10,6 @@ from src.screening.tier1_v2.metrics import calculate_dividend_ttm
 
 from .contracts import FetchStatus
 
-
 TOLERANCES = {
     "close_price": 0.001,
     "supplier_pe_ttm": 0.05,

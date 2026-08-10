@@ -31,7 +31,6 @@ from .quarterly import (
     ttm_parent_net_profit,
 )
 
-
 logger = logging.getLogger(__name__)
 
 
