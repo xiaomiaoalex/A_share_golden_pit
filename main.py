@@ -448,6 +448,9 @@ def build_parser() -> argparse.ArgumentParser:
   python main.py export-tier2 --run-id RUN_ID
   python main.py import-tier2 --file ai_results.json
   python main.py review-tier2 --run-id RUN_ID
+  python main.py export-tier3 --run-id RUN_ID --classification-file industries.json
+  python main.py import-tier3 --file tier3_results.json
+  python main.py review-tier3 --run-id RUN_ID
   python main.py scan                  # 全量三层扫描
   python main.py scan --quick          # 快速扫描（仅Tier1）
   python main.py stock 000002          # 分析万科A
@@ -526,6 +529,40 @@ def build_parser() -> argparse.ArgumentParser:
     )
     migrate_tier2_parser.add_argument('--rollback', action='store_true', help='仅删除Stage B新增表')
     migrate_tier2_parser.add_argument('--db', default=str(settings.DB_PATH), help='SQLite数据库路径')
+
+    export_tier3_parser = subparsers.add_parser(
+        'export-tier3', help='为Stage B人工PASS股票生成行业化风险研究模板'
+    )
+    export_tier3_parser.add_argument('--run-id', required=True, help='Tier1/Stage B运行ID')
+    export_tier3_parser.add_argument(
+        '--classification-file', required=True, help='显式行业分类JSON文件'
+    )
+    export_tier3_parser.add_argument('--output-dir', help='默认output/tier3/RUN_ID')
+    export_tier3_parser.add_argument('--db', default=str(settings.DB_PATH), help='SQLite数据库路径')
+
+    import_tier3_parser = subparsers.add_parser(
+        'import-tier3', help='校验、行业化评估并原子导入Stage C风险输入'
+    )
+    import_tier3_parser.add_argument('--file', required=True, help='已完成的风险研究JSON')
+    import_tier3_parser.add_argument('--db', default=str(settings.DB_PATH), help='SQLite数据库路径')
+
+    review_tier3_parser = subparsers.add_parser(
+        'review-tier3', help='查看Stage C结果或记录人工最终复核'
+    )
+    review_tier3_parser.add_argument('--run-id', required=True, help='运行ID')
+    review_tier3_parser.add_argument('--symbol', help='要复核的股票代码')
+    review_tier3_parser.add_argument('--risk-assessment-id', help='默认取该股票最新风险评估')
+    review_tier3_parser.add_argument('--decision', choices=['PASS', 'REVIEW', 'REJECT'])
+    review_tier3_parser.add_argument('--reviewer', help='人工复核人')
+    review_tier3_parser.add_argument('--rationale', help='复核理由')
+    review_tier3_parser.add_argument('--output', help='可选Markdown报告路径')
+    review_tier3_parser.add_argument('--db', default=str(settings.DB_PATH), help='SQLite数据库路径')
+
+    migrate_tier3_parser = subparsers.add_parser(
+        'tier3-migrate', help='应用当前迁移或仅回滚Stage C新增表'
+    )
+    migrate_tier3_parser.add_argument('--rollback', action='store_true', help='仅删除Stage C新增表')
+    migrate_tier3_parser.add_argument('--db', default=str(settings.DB_PATH), help='SQLite数据库路径')
 
     # scan 命令
     scan_parser = subparsers.add_parser('scan', help='执行全量扫描')
@@ -861,6 +898,150 @@ def _migrate_tier2_command(args) -> None:
         print(f"已应用当前数据库迁移（含Stage B）: {args.db}")
 
 
+def _export_tier3_command(args) -> None:
+    from src.risk.tier3.models import RiskModelRegistry
+    from src.risk.tier3.template import Tier3TemplateExporter, load_classifications
+    from src.storage.tier3_repository import Tier3Repository
+
+    registry = RiskModelRegistry(settings.PROJECT_ROOT / 'config' / 'tier3_risk_rules.json')
+    output_dir = Path(args.output_dir) if args.output_dir else settings.OUTPUT_DIR / 'tier3' / args.run_id
+    result = Tier3TemplateExporter(
+        Tier3Repository(args.db), registry
+    ).export_run(
+        args.run_id,
+        load_classifications(args.classification_file),
+        output_dir,
+    )
+    print(f"Stage C风险研究模板数量: {result['template_count']}")
+    print(f"规则版本: {result['rules_version']}")
+    print(f"索引: {result['index_path']}")
+
+
+def _import_tier3_command(args) -> None:
+    from src.risk.tier3 import RiskModelRegistry, Tier3RiskImporter
+    from src.storage.tier3_repository import Tier3Repository
+
+    registry = RiskModelRegistry(settings.PROJECT_ROOT / 'config' / 'tier3_risk_rules.json')
+    importer = Tier3RiskImporter(
+        Tier3Repository(args.db),
+        registry,
+        settings.PROJECT_ROOT / 'config' / 'tier3_risk_input_schema.json',
+    )
+    print(json.dumps(importer.import_file(args.file), ensure_ascii=False, indent=2))
+
+
+def _review_tier3_command(args) -> None:
+    from src.storage.tier3_repository import Tier3Repository
+
+    repository = Tier3Repository(args.db)
+    action_fields = [
+        args.symbol, args.risk_assessment_id, args.decision, args.reviewer, args.rationale
+    ]
+    if any(value is not None for value in action_fields):
+        if not args.decision or not args.reviewer or not args.rationale:
+            raise ValueError("记录Stage C人工复核必须提供decision、reviewer和rationale")
+        assessment_id = args.risk_assessment_id
+        symbol = _normalize_symbol(args.symbol) if args.symbol else None
+        if assessment_id is None:
+            if symbol is None:
+                raise ValueError("未提供risk-assessment-id时必须提供symbol")
+            latest = repository.latest_assessment(args.run_id, symbol)
+            if latest is None:
+                raise ValueError("该股票尚无Stage C风险评估")
+            assessment_id = latest['risk_assessment_id']
+        review_id = repository.save_human_review(
+            risk_assessment_id=assessment_id,
+            decision=args.decision,
+            reviewer=args.reviewer,
+            rationale=args.rationale,
+            expected_run_id=args.run_id,
+            expected_symbol=symbol,
+        )
+        print(f"review_id: {review_id}")
+
+    rows = repository.summary(args.run_id)
+    if not rows:
+        print("该运行尚无Stage C风险评估")
+        return
+    display = [
+        {
+            'symbol': row['symbol'],
+            'industry_model': row['industry_model'],
+            'system_status': row['system_status'],
+            'data_status': row['data_status'],
+            'hard_vetoes': len(json.loads(row['hard_vetoes_json'])),
+            'warnings': len(json.loads(row['risk_warnings_json'])),
+            'unknown_checks': len(json.loads(row['unknown_checks_json'])),
+            'upstream_current': bool(row['upstream_current']),
+            'effective_status': row['system_status'] if row['upstream_current'] else 'STALE_UPSTREAM',
+            'human_decision': row.get('human_decision'),
+            'reviewer': row.get('reviewer'),
+        }
+        for row in rows
+    ]
+    print(pd.DataFrame(display).to_string(index=False))
+    if args.output:
+        lines = [
+            f"# Stage C风险与价值陷阱报告 — {args.run_id}",
+            "",
+            "| 股票 | 行业模型 | 当前有效结论 | 数据状态 | 硬否决 | 警告 | 未知 | 人工决定 |",
+            "|---|---|---|---|---:|---:|---:|---|",
+        ]
+        for item in display:
+            lines.append(
+                f"| {item['symbol']} | {item['industry_model']} | {item['effective_status']} | "
+                f"{item['data_status']} | {item['hard_vetoes']} | {item['warnings']} | "
+                f"{item['unknown_checks']} | {item['human_decision'] or '-'} |"
+            )
+        for row in rows:
+            hard = json.loads(row['hard_vetoes_json'])
+            warnings = json.loads(row['risk_warnings_json'])
+            traps = json.loads(row['value_trap_signals_json'])
+            falsification = json.loads(row['falsification_conditions_json'])
+            lines.extend([
+                "",
+                f"## {row['symbol']} — {row['industry_model_class']}",
+                "",
+            f"- 系统结论：{row['system_status']}",
+            f"- 上游有效：{'是' if row['upstream_current'] else '否（Stage B已变化）'}",
+                f"- 人工决定：{row.get('human_decision') or '尚未复核'}",
+                f"- 规则版本：{row['rules_version']}",
+                "",
+                "### 硬否决",
+                "",
+                *([f"- `{item['check_id']}`：{item['reasoning_summary']}" for item in hard] or ["- 无"]),
+                "",
+                "### 风险警告",
+                "",
+                *([f"- `{item['check_id']}`：{item['reasoning_summary']}" for item in warnings] or ["- 无"]),
+                "",
+                "### 价值陷阱信号",
+                "",
+                *([f"- `{item['check_id']}`：{item['reasoning_summary']}" for item in traps] or ["- 无"]),
+                "",
+                "### 证伪条件",
+                "",
+                *[f"- {item}" for item in falsification],
+                "",
+            ])
+        output = Path(args.output).resolve()
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text("\n".join(lines) + "\n", encoding='utf-8')
+        print(f"Stage C报告: {output}")
+
+
+def _migrate_tier3_command(args) -> None:
+    from src.storage.tier3_repository import Tier3Repository
+
+    repository = Tier3Repository(args.db)
+    if args.rollback:
+        repository.rollback_stage_c()
+        print(f"已回滚Stage C新增表: {args.db}")
+    else:
+        repository.migrate()
+        print(f"已应用当前数据库迁移（含Stage C）: {args.db}")
+
+
 def main():
     """主入口函数"""
     setup_logging()
@@ -895,6 +1076,18 @@ def main():
             return
         if args.command == 'tier2-migrate':
             _migrate_tier2_command(args)
+            return
+        if args.command == 'export-tier3':
+            _export_tier3_command(args)
+            return
+        if args.command == 'import-tier3':
+            _import_tier3_command(args)
+            return
+        if args.command == 'review-tier3':
+            _review_tier3_command(args)
+            return
+        if args.command == 'tier3-migrate':
+            _migrate_tier3_command(args)
             return
     except (TypeError, ValueError, OSError) as exc:
         parser.error(str(exc))

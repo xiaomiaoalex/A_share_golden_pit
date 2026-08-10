@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://golden-pit.local/schema/tier3-risk-input-v1.0.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "run_id", "symbol", "as_of_date", "tier2_review_id", "industry_classification", "checks", "falsification_conditions", "overall_notes"],
+  "properties": {
+    "schema_version": {"const": "tier3-risk-input-v1.0"},
+    "run_id": {"type": "string", "minLength": 1},
+    "symbol": {"type": "string", "pattern": "^[0-9]{6}$"},
+    "as_of_date": {"type": "string", "format": "date"},
+    "tier2_review_id": {"type": "string", "minLength": 1},
+    "industry_classification": {
+      "type": "object", "additionalProperties": false,
+      "required": ["industry_model", "industry", "rationale", "sources"],
+      "properties": {
+        "industry_model": {"enum": ["INDUSTRIAL", "BANK", "INSURANCE", "REAL_ESTATE"]},
+        "industry": {"type": "string", "minLength": 1},
+        "rationale": {"type": "string", "minLength": 5},
+        "sources": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/source"}}
+      }
+    },
+    "checks": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/check"}},
+    "falsification_conditions": {"type": "array", "minItems": 3, "items": {"type": "string", "minLength": 1}},
+    "overall_notes": {"type": "string", "minLength": 1}
+  },
+  "$defs": {
+    "source": {
+      "type": "object", "additionalProperties": false,
+      "required": ["title", "publisher", "date", "url_or_document", "page_or_section"],
+      "properties": {
+        "title": {"type": "string", "minLength": 1},
+        "publisher": {"type": "string", "minLength": 1},
+        "date": {"type": "string", "format": "date"},
+        "url_or_document": {"type": "string", "minLength": 1},
+        "page_or_section": {"type": "string", "minLength": 1}
+      }
+    },
+    "metric": {
+      "type": "object", "additionalProperties": false,
+      "required": ["name", "value", "unit", "period", "definition"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "value": {"type": ["number", "string", "null"]},
+        "unit": {"type": "string", "minLength": 1},
+        "period": {"type": "string", "minLength": 1},
+        "definition": {"type": "string", "minLength": 1}
+      }
+    },
+    "check": {
+      "type": "object", "additionalProperties": false,
+      "required": ["check_id", "status", "confidence", "facts", "inferences", "counter_evidence", "sources", "metrics", "reasoning_summary"],
+      "properties": {
+        "check_id": {"type": "string", "pattern": "^[a-z0-9_]+$"},
+        "status": {"enum": ["TRIGGERED", "CLEAR", "UNKNOWN", "NOT_APPLICABLE"]},
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        "facts": {"type": "array", "items": {"type": "string", "minLength": 1}},
+        "inferences": {"type": "array", "items": {"type": "string", "minLength": 1}},
+        "counter_evidence": {"type": "array", "items": {"type": "string", "minLength": 1}},
+        "sources": {"type": "array", "items": {"$ref": "#/$defs/source"}},
+        "metrics": {"type": "array", "items": {"$ref": "#/$defs/metric"}},
+        "reasoning_summary": {"type": "string", "minLength": 1}
+      }
+    }
+  }
+}

@@ -283,6 +283,9 @@ def test_stage_b_rollback_preserves_stage_a_tables_and_rows(tmp_path):
         assert connection.execute(
             "SELECT 1 FROM sqlite_master WHERE name='tier2_evidence_packages'"
         ).fetchone() is None
+        assert connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE name='tier3_risk_assessments'"
+        ).fetchone() is None
 
 
 def test_stage_b_migration_is_additive_to_legacy_database(tmp_path):
@@ -299,3 +302,6 @@ def test_stage_b_migration_is_additive_to_legacy_database(tmp_path):
         assert connection.execute(
             "SELECT 1 FROM sqlite_master WHERE name='human_reviews'"
         ).fetchone()
+        assert connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE name='tier3_risk_assessments'"
+        ).fetchone() is None

@@ -62,7 +62,22 @@ python main.py review-tier2 --run-id RUN_ID
 [`docs/stage_b_tier2_human_ai.md`](docs/stage_b_tier2_human_ai.md)。
 
 > 下文原三层命令仍保留用于兼容，但其Tier1/Tier2不是本次重构后的正式入口；
-> 阶段C完成前，Stage B不会自动调用旧Tier3。
+> Stage B不会自动调用旧Tier3。
+
+## 阶段C：行业化风险与价值陷阱过滤（当前正式入口）
+
+Stage C只处理最新Stage B人工 `PASS`，并按一般企业、银行、保险、地产四类模型检查
+财务真实性、流动性、分红、治理、周期顶部和结构性价值陷阱。任何硬否决成立即
+`REJECT`；证据缺失或风险警告为 `REVIEW`；系统PASS仍需人工终审。
+
+```bash
+python main.py export-tier3 --run-id RUN_ID --classification-file industries.json
+python main.py import-tier3 --file filled_tier3_results.json
+python main.py review-tier3 --run-id RUN_ID
+```
+
+详细规则、数据口径、迁移和已知边界见
+[`docs/stage_c_tier3_risk_filter.md`](docs/stage_c_tier3_risk_filter.md)。
 
 ---
 
@@ -80,7 +95,7 @@ python main.py review-tier2 --run-id RUN_ID
 │  ├── 需求/竞争/分红/利润质量/市场误价/赔率逐项审查               │
 │  └── AI结构化建议 + 系统否决 + 人工最终确认                      │
 │                          ↓                                   │
-│  Tier3 风险与价值陷阱排除（阶段C待实现）                         │
+│  Tier3 风险与价值陷阱排除（阶段C正式入口）                       │
 │  ├── 财务真实性/偿债/治理/周期顶部/结构性陷阱                    │
 │  └── 行业适配模型 + 硬否决                                      │
 └─────────────────────────────────────────────────────────────┘

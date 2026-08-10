@@ -43,6 +43,14 @@ STAGE_B_MIGRATIONS = (
     ),
 )
 
+STAGE_C_MIGRATIONS = (
+    (
+        "004_tier3_risk_filter",
+        "004_tier3_risk_filter_up.sql",
+        "Stage C industry-aware risk and value-trap filter",
+    ),
+)
+
 
 def _json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
@@ -72,8 +80,11 @@ class Tier1Repository:
     def migrate(self) -> None:
         self._apply_migrations(MIGRATIONS)
 
-    def migrate_all(self) -> None:
+    def migrate_through_stage_b(self) -> None:
         self._apply_migrations(MIGRATIONS + STAGE_B_MIGRATIONS)
+
+    def migrate_all(self) -> None:
+        self._apply_migrations(MIGRATIONS + STAGE_B_MIGRATIONS + STAGE_C_MIGRATIONS)
 
     def _apply_migrations(self, migrations) -> None:
         with self.connect() as connection:
@@ -101,6 +112,9 @@ class Tier1Repository:
                 )
 
     def rollback_stage_a(self) -> None:
+        tier3_down = (
+            self.project_root / "scripts" / "migrations" / "004_tier3_risk_filter_down.sql"
+        )
         tier2_down = (
             self.project_root / "scripts" / "migrations" / "003_tier2_human_ai_down.sql"
         )
@@ -114,6 +128,7 @@ class Tier1Repository:
             self.project_root / "scripts" / "migrations" / "001_tier1_v2_down.sql"
         )
         with self.connect() as connection:
+            connection.executescript(tier3_down.read_text(encoding="utf-8"))
             connection.executescript(tier2_down.read_text(encoding="utf-8"))
             connection.executescript(quality_down.read_text(encoding="utf-8"))
             connection.executescript(down_path.read_text(encoding="utf-8"))
@@ -125,6 +140,10 @@ class Tier1Repository:
                 connection.execute(
                     "DELETE FROM schema_migrations WHERE version = ?",
                     ("003_tier2_human_ai",),
+                )
+                connection.execute(
+                    "DELETE FROM schema_migrations WHERE version = ?",
+                    ("004_tier3_risk_filter",),
                 )
 
     @staticmethod

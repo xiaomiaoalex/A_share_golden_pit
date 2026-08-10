@@ -28,9 +28,15 @@ class Tier2Repository:
         return self.tier1.connect()
 
     def migrate(self) -> None:
-        self.tier1.migrate_all()
+        self.tier1.migrate_through_stage_b()
 
     def rollback_stage_b(self) -> None:
+        tier3_down_path = (
+            self.tier1.project_root
+            / "scripts"
+            / "migrations"
+            / "004_tier3_risk_filter_down.sql"
+        )
         down_path = (
             self.tier1.project_root
             / "scripts"
@@ -38,11 +44,16 @@ class Tier2Repository:
             / "003_tier2_human_ai_down.sql"
         )
         with self.connect() as connection:
+            connection.executescript(tier3_down_path.read_text(encoding="utf-8"))
             connection.executescript(down_path.read_text(encoding="utf-8"))
             if self.tier1._table_exists(connection, "schema_migrations"):
                 connection.execute(
                     "DELETE FROM schema_migrations WHERE version=?",
                     ("003_tier2_human_ai",),
+                )
+                connection.execute(
+                    "DELETE FROM schema_migrations WHERE version=?",
+                    ("004_tier3_risk_filter",),
                 )
 
     def tier1_pass_candidates(
