@@ -9,7 +9,7 @@ from src.data.point_in_time.contracts import DataEnvelope, FetchStatus
 from src.screening.tier1_v2.decision import evaluate_tier1
 from src.storage.tier1_repository import Tier1Repository
 from src.web.dashboard import DashboardService
-from src.web.server import build_handler
+from src.web.server import _bind_server, build_handler, prepare_database
 from tests.unit.test_tier1_decision import decision_input
 
 
@@ -20,6 +20,58 @@ def test_empty_dashboard_is_ready_for_first_run(tmp_path):
     assert result["summary"]["universe"] == 0
     assert result["candidates"] == []
     assert result["next_action"]["key"] == "new"
+
+
+def test_web_startup_prepares_and_verifies_database(tmp_path):
+    db_path = tmp_path / "fresh" / "platform.db"
+
+    result = prepare_database(db_path)
+
+    assert result["status"] == "READY"
+    assert result["file"] == "platform.db"
+    assert result["migration_count"] >= 1
+
+
+def test_health_endpoint_reports_frontend_backend_readiness(tmp_path):
+    db_path = tmp_path / "health.db"
+    prepare_database(db_path)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), build_handler(db_path))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with urlopen(
+            f"http://127.0.0.1:{server.server_port}/api/health"
+        ) as response:
+            result = json.load(response)
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+    assert result["status"] == "ok"
+    assert result["service"] == "a-share-strategy-platform"
+    assert result["database"]["status"] == "ready"
+    assert result["strategies"]["count"] >= 1
+
+
+def test_startup_reuses_an_existing_platform_process(tmp_path):
+    db_path = tmp_path / "reuse.db"
+    prepare_database(db_path)
+    server, url = _bind_server(db_path, "127.0.0.1", 0)
+    assert server is not None
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        reused_server, reused_url = _bind_server(
+            db_path, "127.0.0.1", server.server_port
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+    assert reused_server is None
+    assert reused_url == url
 
 
 def test_dashboard_projects_formal_tier1_state(tmp_path):

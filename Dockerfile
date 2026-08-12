@@ -38,5 +38,10 @@ RUN mkdir -p data/db output logs
 # 初始化数据库
 RUN python main.py strategy golden-pit tier3-migrate
 
-# 默认命令
-CMD ["python", "main.py", "--help"]
+EXPOSE 8765
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8765/api/health', timeout=3)" || exit 1
+
+# 默认同时提供静态前端和后端 API
+CMD ["python", "web_app.py", "--host", "0.0.0.0", "--no-browser"]

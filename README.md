@@ -109,9 +109,15 @@ python main.py strategy golden-pit workflow --run-id RUN_ID
 查看研究漏斗、候选股详情、数据质量和运行记录，并可一键启动全市场筛选（或指定
 股票）、生成证据研究包以及提交证据研究/风险终审人工复核：
 
+Windows 可直接双击项目根目录的 `start.bat`；Linux/macOS 使用：
+
 ```bash
-python web_app.py
+bash start.sh
 ```
+
+启动器会在同一进程中提供前端静态页面和后端 API，自动应用数据库迁移并完成 SQLite
+读写预检，健康检查通过后再打开浏览器。重复点击时会复用已运行的平台；默认端口被其他
+程序占用时会自动尝试后续端口。
 
 浏览器默认打开 `http://127.0.0.1:8765`。如需指定数据库、端口或禁止自动打开浏览器：
 
@@ -119,10 +125,17 @@ python web_app.py
 python web_app.py --db data/db/strategy_platform.db --port 9000 --no-browser
 ```
 
-控制台默认仅监听本机回环地址。部署或升级时先显式执行 `python main.py migrate`；
-策略模块构造和只读 API 不再隐式修改数据库。筛选和证据包导出由持久化、单并发的
+后端状态可由 `http://127.0.0.1:8765/api/health` 检查。控制台默认仅监听本机回环
+地址；一键启动入口会执行版本化迁移，CLI 和其他部署流程仍可显式运行
+`python main.py migrate`。策略模块构造和只读 API 不会隐式修改数据库。筛选和证据包导出由持久化、单并发的
 本地任务队列执行，可在“运行记录”查看排队、运行和中断状态；AI研究 JSON 和行业
 分类等正式材料仍通过对应 CLI 导入，以保留既有的严格校验和证据契约。
+
+Docker 环境可一条命令启动同一套前后端：
+
+```bash
+docker compose up --build
+```
 
 平台通过策略注册表隔离数据、策略、执行和展示层。新增策略可内置注册，也可发布
 `a_share_strategy_platform.strategies` Python entry point，由平台启动时自动发现；只需
