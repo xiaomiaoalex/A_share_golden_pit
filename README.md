@@ -9,6 +9,9 @@
 受控读取、结构化报告和人工审批规范见
 [AI 研究与知识治理层架构](docs/ai_research_architecture.md)。AI 模型默认采用中国模型
 优先策略，首选适配 DeepSeek，并以通义千问作为首个自动降级供应商。
+逐阶段代码与自动验收映射见
+[路线图验收矩阵](docs/roadmap_acceptance_matrix.md)。生产迁移必须显式执行
+`python main.py migrate`；Web 启动只做只读迁移预检，不会隐式修改数据库。
 
 ## 正式研究链路
 
@@ -122,9 +125,9 @@ Windows 可直接双击项目根目录的 `start.bat`；Linux/macOS 使用：
 bash start.sh
 ```
 
-启动器会在同一进程中提供前端静态页面和后端 API，自动应用数据库迁移并完成 SQLite
-读写预检，健康检查通过后再打开浏览器。重复点击时会复用已运行的平台；默认端口被其他
-程序占用时会自动尝试后续端口。
+启动器会在同一进程中提供前端静态页面和后端 API，并只读校验 SQLite 迁移状态，
+健康检查通过后再打开浏览器。首次启动或升级版本前必须显式运行 `python main.py migrate`。
+重复点击时会复用已运行的平台；默认端口被其他程序占用时会自动尝试后续端口。
 
 浏览器默认打开 `http://127.0.0.1:8765`。如需指定数据库、端口或禁止自动打开浏览器：
 
@@ -133,8 +136,8 @@ python web_app.py --db data/db/strategy_platform.db --port 9000 --no-browser
 ```
 
 后端状态可由 `http://127.0.0.1:8765/api/health` 检查。控制台默认仅监听本机回环
-地址；一键启动入口会执行版本化迁移，CLI 和其他部署流程仍可显式运行
-`python main.py migrate`。策略模块构造和只读 API 不会隐式修改数据库。筛选和证据包导出由持久化、单并发的
+地址；数据库迁移是独立部署步骤，Web 启动不会执行 DDL。策略模块构造和只读 API
+不会隐式修改数据库。筛选和证据包导出由持久化、单并发的
 本地任务队列执行，可在“运行记录”查看排队、运行和中断状态；AI研究 JSON 和行业
 分类等正式材料仍通过对应 CLI 导入，以保留既有的严格校验和证据契约。
 
@@ -142,6 +145,14 @@ Docker 环境可一条命令启动同一套前后端：
 
 ```bash
 docker compose up --build
+```
+
+路线图阶段验收、外部框架边界和生产前检查见
+[`docs/roadmap_acceptance_matrix.md`](docs/roadmap_acceptance_matrix.md)。数据库备份使用：
+
+```bash
+python scripts/backup_database.py data/db/strategy_platform.db output/strategy_platform.backup.db
+python scripts/dependency_inventory.py
 ```
 
 平台通过策略注册表隔离数据、策略、执行和展示层。新增策略可内置注册，也可发布

@@ -18,12 +18,23 @@
       </div>
 
       <nav class="main-nav" aria-label="主导航">
-        <button class="nav-item shell-nav active" data-shell-page="home">
-          <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/></svg>
-          <span>策略总览</span><span class="nav-count" id="strategyNavCount">0</span>
-        </button>
-        <div class="strategy-catalog-nav" id="strategyCatalogNav"></div>
-        <div id="strategyNavigation"></div>
+        <div class="nav-group strategy-center-group">
+          <div class="nav-section-label">策略工作区</div>
+          <button class="nav-item shell-nav nav-parent active" data-shell-page="home">
+            <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/></svg>
+            <span>策略中心</span><span class="nav-count" id="strategyNavCount">0</span>
+          </button>
+          <div class="strategy-catalog-nav" id="strategyCatalogNav" aria-label="具体策略"></div>
+        </div>
+        <div class="nav-section-label platform-section-label">平台能力</div>
+        <button class="nav-item shell-nav" data-shell-page="signals"><span class="strategy-nav-mark">信</span><span>统一信号</span></button>
+        <button class="nav-item shell-nav" data-shell-page="data-center"><span class="strategy-nav-mark">数</span><span>数据中心</span></button>
+        <button class="nav-item shell-nav" data-shell-page="ai-research"><span class="strategy-nav-mark">AI</span><span>AI 研究中心</span></button>
+        <button class="nav-item shell-nav" data-shell-page="integrations"><span class="strategy-nav-mark">健</span><span>集成健康</span></button>
+        <button class="nav-item shell-nav" data-shell-page="laboratory"><span class="strategy-nav-mark">研</span><span>研究实验室</span></button>
+        <button class="nav-item shell-nav" data-shell-page="backtests"><span class="strategy-nav-mark">测</span><span>回测中心</span></button>
+        <button class="nav-item shell-nav" data-shell-page="portfolios"><span class="strategy-nav-mark">组</span><span>组合与风险</span></button>
+        <button class="nav-item shell-nav" data-shell-page="governance"><span class="strategy-nav-mark">治</span><span>策略发布</span></button>
       </nav>
 
       <div class="sidebar-bottom">
@@ -37,7 +48,7 @@
         <button class="icon-button menu-button" id="menuButton" aria-label="展开菜单">
           <svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
         </button>
-        <div class="topbar-context"><span class="eyebrow">研究工作台</span><strong id="pageTitle">策略总览</strong></div>
+        <div class="topbar-context"><span class="eyebrow">研究工作台</span><strong id="pageTitle">策略中心</strong></div>
         <div class="topbar-actions">
           <div class="platform-health checking" id="platformHealth" role="status" title="前端、后端与数据库连接状态"><span></span><strong id="platformHealthText">正在连接</strong></div>
           <label class="run-select-wrap strategy-control hidden" title="切换运行记录"><span>数据批次</span><select id="runSelect" aria-label="选择运行记录"></select></label>
@@ -49,7 +60,7 @@
       <div class="loading-bar" id="loadingBar"></div>
       <section class="page active" id="page-home">
         <div class="page-heading strategy-home-heading">
-          <div><span class="overline">STRATEGY PORTFOLIO</span><h1>选股策略总览</h1><p>集中查看不同策略的定位、运行状态与候选产出，再进入独立策略工作台。</p></div>
+          <div><span class="overline">STRATEGY PORTFOLIO</span><h1>策略中心</h1><p>集中查看不同策略的定位、运行状态与候选产出，再进入独立策略工作台。</p></div>
           <div class="strategy-count-chip"><span>已接入策略</span><strong id="strategyCount">—</strong></div>
         </div>
         <div class="strategy-platform-summary panel">
@@ -59,6 +70,28 @@
         <div class="strategy-grid" id="strategyGrid"></div>
         <div class="empty-state panel hidden" id="strategyEmpty"><h3>暂未接入选股策略</h3><p>注册策略模块后会自动出现在这里。</p></div>
       </section>
+      <section class="page" id="page-signals">
+        <div class="page-heading"><div><span class="overline">UNIFIED SIGNALS</span><h1>跨策略统一信号</h1><p>统一展示方向、评分、排名、置信度、有效期和候选归因。</p></div></div>
+        <div class="panel"><div id="signalList" class="strategy-grid"></div><div id="signalEmpty" class="empty-state"><h3>暂无统一信号</h3><p>策略运行写入 SignalRecord 后将在此聚合。</p></div></div>
+      </section>
+      <section class="page" id="page-data-center">
+        <div class="page-heading"><div><span class="overline">POINT-IN-TIME DATA</span><h1>数据中心</h1><p>不可变快照、财报修订、数据质量、血缘和字段外发策略。</p></div></div>
+        <div class="strategy-grid" id="snapshotGrid"></div>
+        <div class="panel"><h2>字段外发策略</h2><div class="strategy-grid" id="egressGrid"></div></div>
+      </section>
+      <section class="page" id="page-ai-research">
+        <div class="page-heading"><div><span class="overline">GOVERNED AI RESEARCH</span><h1>AI 研究中心</h1><p>数据集、提示词版本、研究运行、报告证据和人工审批均保留历史版本。</p></div></div>
+        <div class="strategy-grid" id="researchSummary"></div>
+        <div class="panel"><h2>研究报告</h2><div id="researchReports" class="strategy-grid"></div><div id="researchEmpty" class="empty-state"><h3>暂无研究报告</h3><p>Mock Provider 已可用于完整审批流程，真实 API 尚未启用。</p></div></div>
+      </section>
+      <section class="page" id="page-integrations">
+        <div class="page-heading"><div><span class="overline">INTEGRATION HEALTH</span><h1>集成健康</h1><p>组件、模型能力与配置状态；API Key 不发送到前端。</p></div></div>
+        <div class="strategy-grid" id="integrationGrid"></div>
+      </section>
+      <section class="page" id="page-laboratory"><div class="page-heading"><div><span class="overline">RESEARCH LAB</span><h1>研究实验室</h1><p>点时因子、IC、walk-forward 与模型评测产物。</p></div></div><div class="strategy-grid artifact-grid" data-artifact-type="FACTOR_RESEARCH"></div></section>
+      <section class="page" id="page-backtests"><div class="page-heading"><div><span class="overline">BACKTEST CENTER</span><h1>回测中心</h1><p>A 股成交规则、成本、未成交原因与双引擎对照产物。</p></div></div><div class="strategy-grid artifact-grid" data-artifact-type="BACKTEST"></div></section>
+      <section class="page" id="page-portfolios"><div class="page-heading"><div><span class="overline">PORTFOLIO & RISK</span><h1>组合与风险</h1><p>信号到权重、硬约束、行业暴露和不可行原因。</p></div></div><div class="strategy-grid artifact-grid" data-artifact-type="PORTFOLIO"></div></section>
+      <section class="page" id="page-governance"><div class="page-heading"><div><span class="overline">RELEASE GOVERNANCE</span><h1>策略发布</h1><p>草稿、验证、Shadow、生产、停用、跨策略冲突与追加式审计。</p></div></div><div class="strategy-grid" id="signalGovernance"></div><div class="panel"><h2>发布生命周期</h2><div class="strategy-grid" id="releaseGrid"></div></div><div class="panel"><h2>审计时间线</h2><div class="strategy-grid" id="auditGrid"></div></div><div class="strategy-grid artifact-grid" data-artifact-type="EVALUATION"></div></section>
       <div id="strategyWorkspace"></div>
     </main>
   </div>

@@ -19,7 +19,7 @@ const statusLabels = {
   PASS: '通过', FAIL: '未通过', SUPERSEDED: '已失效', REVIEW: '待复核', REJECT: '否决',
   COMPLETE: '数据完整', PARTIAL: '部分数据', ERROR: '数据异常', PENDING_DATA: '数据待补', DATA_ERROR: '数据异常',
   FINISHED: '已完成', FINISHED_WITH_ERRORS: '完成但有异常', RUNNING: '运行中',
-  INTERRUPTED: '已中断', QUEUED: '排队中',
+  PAUSED: '已暂停', CANCELLED: '已停止', INTERRUPTED: '已中断', QUEUED: '排队中',
   SUCCEEDED: '已完成', FAILED: '失败', '未进入': '未进入',
   '待生成证据包': '待生成证据包', '待AI研究': '待 AI 研究', '待人工复核': '待人工复核', '待风险研究': '待风险研究', '已失效': '已失效'
 };
@@ -61,6 +61,8 @@ function bindEvents() {
   $('#scrim').addEventListener('click', closeDrawer);
   $('#nextActionButton').addEventListener('click', nextAction);
   document.addEventListener('click', e => {
+    const control = e.target.closest('[data-run-control]');
+    if (control) { e.preventDefault(); e.stopPropagation(); controlRun(control.dataset.runControl, control.dataset.runId); return; }
     const recovery = e.target.closest('[data-recovery]');
     if (recovery) { e.preventDefault(); e.stopPropagation(); startRecovery(recovery.dataset.recovery, recovery.dataset.runId); return; }
     const detail = e.target.closest('[data-detail]');
@@ -256,10 +258,48 @@ function renderRuns() {
   $('#runList').innerHTML = runs.map(run => {
     const total = run.universe_size ?? run.progress?.total;
     const recovery = run.progress?.recovery || {};
-    const actions = `${recovery.can_resume ? `<button class="recovery-button" data-recovery="resume" data-run-id="${esc(run.run_id)}"><svg viewBox="0 0 24 24"><path d="M4 12a8 8 0 1 0 3-6.2"/><path d="M4 4v6h6"/></svg>从断点继续 <span>${recovery.unfinished_count} 只</span></button>` : ''}${recovery.can_retry_data ? `<button class="recovery-button warning" data-recovery="data" data-run-id="${esc(run.run_id)}"><svg viewBox="0 0 24 24"><path d="M12 3v6l4 2"/><circle cx="12" cy="12" r="9"/></svg>补跑数据缺口 <span>${recovery.data_gap_count} 只</span></button>` : ''}`;
-    return `<article class="run-card ${run.run_id === state.data.run?.run_id ? 'selected' : ''}" data-run="${esc(run.run_id)}"><div class="run-primary"><strong>${esc(run.as_of_date)} 点时筛选</strong><span>${esc(run.run_id)}</span></div><div class="run-meta"><span>股票池</span><strong>${total ?? '—'} 只</strong></div><div class="run-meta run-version"><span>计算版本</span><strong>${esc(run.calculation_version)}</strong></div><div class="run-meta"><span>${run.status === 'RUNNING' ? '开始时间' : '完成时间'}</span><strong>${formatTime(run.finished_at || run.started_at)}</strong></div>${badge(run.status)}${['RUNNING','INTERRUPTED'].includes(run.status) ? progressMarkup(run.progress) : ''}${actions ? `<div class="run-recovery-actions">${actions}</div>` : ''}</article>`;
+    const controls = run.status === 'RUNNING'
+      ? `<button class="recovery-button" data-run-control="pause" data-run-id="${esc(run.run_id)}">Ⅱ 暂停运行</button><button class="recovery-button danger" data-run-control="stop" data-run-id="${esc(run.run_id)}">■ 停止运行</button>`
+      : run.status === 'PAUSED'
+        ? `<button class="recovery-button" data-run-control="resume" data-run-id="${esc(run.run_id)}">▶ 恢复运行</button><button class="recovery-button danger" data-run-control="stop" data-run-id="${esc(run.run_id)}">■ 停止运行</button>`
+        : '';
+    const actions = `${controls}${recovery.can_resume && run.status !== 'PAUSED' ? `<button class="recovery-button" data-recovery="resume" data-run-id="${esc(run.run_id)}"><svg viewBox="0 0 24 24"><path d="M4 12a8 8 0 1 0 3-6.2"/><path d="M4 4v6h6"/></svg>从断点继续 <span>${recovery.unfinished_count} 只</span></button>` : ''}${recovery.can_retry_data ? `<button class="recovery-button warning" data-recovery="data" data-run-id="${esc(run.run_id)}"><svg viewBox="0 0 24 24"><path d="M12 3v6l4 2"/><circle cx="12" cy="12" r="9"/></svg>补跑数据缺口 <span>${recovery.data_gap_count} 只</span></button>` : ''}`;
+    const controlledAt = run.manual_control ? `<span class="control-note">${esc(statusLabels[run.status] || run.status)} · ${esc(run.manual_control.actor)} · ${formatTime(run.manual_control.created_at)}</span>` : '';
+    return `<article class="run-card ${run.run_id === state.data.run?.run_id ? 'selected' : ''}" data-run="${esc(run.run_id)}"><div class="run-primary"><strong>${esc(run.as_of_date)} 点时筛选</strong><span>${esc(run.run_id)}</span>${controlledAt}</div><div class="run-meta"><span>股票池</span><strong>${total ?? '—'} 只</strong></div><div class="run-meta run-version"><span>计算版本</span><strong>${esc(run.calculation_version)}</strong></div><div class="run-meta"><span>${run.status === 'RUNNING' ? '开始时间' : '状态时间'}</span><strong>${formatTime(run.finished_at || run.started_at)}</strong></div>${badge(run.status)}${['RUNNING','PAUSED','INTERRUPTED'].includes(run.status) ? progressMarkup(run.progress) : ''}${actions ? `<div class="run-recovery-actions">${actions}</div>` : ''}</article>`;
   }).join('');
   $('#runsEmpty').classList.toggle('hidden', runs.length > 0);
+}
+
+async function controlRun(action, runId) {
+  const copy = {
+    pause: ['暂停运行', '暂停后将安全终止当前 Worker，可稍后从断点恢复。'],
+    resume: ['恢复运行', '将沿用原 run_id 和固化股票池，从未完成标的继续。'],
+    stop: ['停止运行', '停止后该运行进入终态，不能再次恢复。']
+  }[action];
+  if (!copy || !window.confirm(`${copy[1]}\n\n确认${copy[0]}？`)) return;
+  const actor = window.prompt('请输入操作者标识，用于审计记录', 'web-operator');
+  if (!actor) return;
+  try {
+    const url = `/api/strategies/golden-pit/actions/${action}-run`;
+    const payload = {run_id:runId, actor, reason:`Web 控制台${copy[0]}`};
+    let response = await postControl(url, payload);
+    if (response.status === 403) {
+      const token = window.prompt('请输入平台变更令牌');
+      if (!token) return;
+      sessionStorage.setItem('platformApiToken', token);
+      response = await postControl(url, payload);
+    }
+    const data = await response.json(); if (!response.ok) throw new Error(data.error || `${copy[0]}失败`);
+    toast(`${copy[0]}指令已执行`, action === 'resume' ? '断点续跑任务已进入队列。' : '旧 Worker 已被 fencing，不能继续提交结果。');
+    await loadOverview(runId); await loadJobs();
+  } catch (error) { toast(`${copy[0]}失败`, error.message, true); }
+}
+
+function postControl(url, payload) {
+  const token = sessionStorage.getItem('platformApiToken') || '';
+  const headers = {'Content-Type':'application/json'};
+  if (token) headers['X-Platform-Token'] = token;
+  return fetch(url, {method:'POST', headers, body:JSON.stringify(payload)});
 }
 
 async function startRecovery(mode, runId) {
@@ -420,7 +460,7 @@ function navigate(page) {
 }
 
 function companyCell(c) { return `<div class="company"><span class="company-mark">${esc(c.stock_name.slice(0,1))}</span><div><strong>${esc(c.stock_name)}</strong><span>${esc(c.symbol)}</span></div></div>`; }
-function badge(status) { const raw = String(status ?? '—'); const cls = ['PASS','FAIL','SUPERSEDED','REJECT','ERROR','COMPLETE','FINISHED','FINISHED_WITH_ERRORS','REVIEW','PENDING_DATA','DATA_ERROR','QUEUED','RUNNING','SUCCEEDED','FAILED','INTERRUPTED'].includes(raw) ? raw : (raw.startsWith('待') ? 'pending' : 'neutral'); return `<span class="badge ${cls}">${esc(statusLabels[raw] || raw)}</span>`; }
+function badge(status) { const raw = String(status ?? '—'); const cls = ['PASS','FAIL','SUPERSEDED','REJECT','ERROR','COMPLETE','FINISHED','FINISHED_WITH_ERRORS','REVIEW','PENDING_DATA','DATA_ERROR','QUEUED','RUNNING','PAUSED','CANCELLED','SUCCEEDED','FAILED','INTERRUPTED'].includes(raw) ? raw : (raw.startsWith('待') ? 'pending' : 'neutral'); return `<span class="badge ${cls}">${esc(statusLabels[raw] || raw)}</span>`; }
 function number(value, suffix='') { return value == null ? '—' : `${fmt.format(value)}${suffix}`; }
 function percent(value) { return value == null ? '—' : `${fmt.format(value * 100)}%`; }
 function sequence(values) { return values?.length ? values.map(v => `${fmt.format(v*100)}%`).join(' → ') : '—'; }

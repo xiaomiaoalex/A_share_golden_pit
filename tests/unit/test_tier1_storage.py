@@ -154,7 +154,9 @@ def test_expired_worker_lease_makes_processing_item_retryable(tmp_path):
     first_token = repository.acquire_run_lease(
         run_id, allow_recent_activity=True
     )
-    repository.begin_item_attempt(run_id, "000001", "INITIAL")
+    repository.begin_item_attempt(
+        run_id, "000001", "INITIAL", worker_token=first_token
+    )
     with repository.connect() as connection:
         connection.execute(
             "UPDATE screening_run_leases SET lease_expires_at=? WHERE run_id=?",
@@ -177,6 +179,56 @@ def test_expired_worker_lease_makes_processing_item_retryable(tmp_path):
     assert attempt["status"] == "FAILED"
     assert attempt["error_type"] == "LEASE_EXPIRED"
     repository.release_run_lease(run_id, second_token)
+
+
+def test_stale_worker_is_fenced_after_lease_takeover(tmp_path):
+    repository = Tier1Repository(tmp_path / "fencing.db")
+    run_id = repository.begin_run(date(2026, 8, 10), Tier1Config())
+    repository.save_run_universe(
+        run_id, [UniverseItem("000001", "测试股份", "SZ")]
+    )
+    old_token = repository.acquire_run_lease(
+        run_id, allow_recent_activity=True, lease_seconds=120
+    )
+    with repository.connect() as connection:
+        connection.execute(
+            "UPDATE screening_run_leases SET lease_expires_at=? WHERE run_id=?",
+            ((datetime.now() - timedelta(seconds=1)).isoformat(), run_id),
+        )
+    new_token = repository.acquire_run_lease(
+        run_id, allow_recent_activity=True, lease_seconds=120
+    )
+
+    with pytest.raises(ValueError, match="fencing token"):
+        repository.begin_item_attempt(
+            run_id, "000001", "RESUME", worker_token=old_token
+        )
+    attempt_id = repository.begin_item_attempt(
+        run_id, "000001", "RESUME", worker_token=new_token
+    )
+    with pytest.raises(ValueError, match="fencing token"):
+        repository.save_decision(
+            run_id,
+            evaluate_tier1(decision_input()),
+            attempt_id=attempt_id,
+            worker_token=old_token,
+        )
+
+
+def test_expired_lease_cannot_be_resurrected_by_heartbeat(tmp_path):
+    repository = Tier1Repository(tmp_path / "heartbeat-fencing.db")
+    run_id = repository.begin_run(date(2026, 8, 10), Tier1Config())
+    token = repository.acquire_run_lease(
+        run_id, allow_recent_activity=True, lease_seconds=120
+    )
+    with repository.connect() as connection:
+        connection.execute(
+            "UPDATE screening_run_leases SET lease_expires_at=? WHERE run_id=?",
+            ((datetime.now() - timedelta(seconds=1)).isoformat(), run_id),
+        )
+
+    with pytest.raises(ValueError, match="租约已失效"):
+        repository.heartbeat_run_lease(run_id, token)
 
 
 def test_source_verification_report_is_persisted(tmp_path):
@@ -236,6 +288,16 @@ def test_existing_stage_a_database_upgrades_to_quality_migration(tmp_path):
         "006_strategy_identity",
         "golden-pit:007_execution_integrity",
         "golden-pit:008_fiscal_year_dividend",
+        "golden-pit:009_lease_fencing",
+        "platform:010_research_contracts",
+        "platform:011_point_in_time_foundation",
+        "platform:012_governance",
+        "platform:013_artifacts",
+        "platform:014_evidence_index",
+        "platform:015_ai_governance",
+        "platform:016_shadow_oms",
+        "platform:017_durable_orchestration",
+        "golden-pit:018_run_controls",
     }
 
 

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import hmac
 import json
 import mimetypes
+import os
 import sqlite3
 import sys
 import threading
@@ -18,32 +20,51 @@ from urllib.error import URLError
 from urllib.parse import parse_qs, unquote, urlparse
 from urllib.request import urlopen
 
+from src.ai_research import ResearchReportStatus, ResearchRepository
+from src.artifacts import ArtifactRepository
+from src.data.snapshots import SnapshotService
 from src.execution import JobRegistry
+from src.governance import GovernanceService, ReleaseStatus, signal_governance
+from src.integrations import integration_health
+from src.signals import SignalRepository
 from src.strategies import StrategyRegistry, build_strategy_registry
 from src.strategies.golden_pit.persistence.tier1_repository import Tier1Repository
 
 STATIC_ROOT = Path(__file__).resolve().parent / "static"
 MAX_BODY = 1_000_000
 SERVICE_ID = "a-share-strategy-platform"
+API_CONTRACT_VERSION = 3
 
 
 def prepare_database(db_path: str | Path) -> dict[str, Any]:
-    """Apply all known migrations and verify that the database is writable."""
+    """Verify that explicit deployment migrations have already been applied."""
     path = Path(db_path)
-    Tier1Repository(path).migrate_all()
+    if not path.is_file():
+        raise RuntimeError(
+            f"数据库不存在: {path}。请先运行 python main.py migrate --db {path}"
+        )
     with sqlite3.connect(path, timeout=10) as connection:
         connection.execute("PRAGMA busy_timeout=10000")
-        connection.execute("BEGIN IMMEDIATE")
-        connection.execute("CREATE TABLE __platform_startup_probe(value INTEGER)")
-        connection.execute("INSERT INTO __platform_startup_probe(value) VALUES (1)")
-        migration_count = int(
-            connection.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0]
+        try:
+            applied = {
+                str(row[0])
+                for row in connection.execute(
+                    "SELECT version FROM schema_migrations"
+                ).fetchall()
+            }
+        except sqlite3.OperationalError as exc:
+            raise RuntimeError("数据库尚未迁移，请先运行 python main.py migrate") from exc
+    required = {version for version, _, _ in Tier1Repository(path).all_migrations()}
+    missing = required - applied
+    if missing:
+        raise RuntimeError(
+            "数据库迁移不完整，请先运行 python main.py migrate；缺少: "
+            + ", ".join(sorted(missing))
         )
-        connection.rollback()
     return {
         "status": "READY",
         "file": path.name,
-        "migration_count": migration_count,
+        "migration_count": len(applied),
     }
 
 
@@ -64,6 +85,7 @@ def _health_payload(
     return {
         "status": "ok",
         "service": SERVICE_ID,
+        "api_contract_version": API_CONTRACT_VERSION,
         "checked_at": datetime.now(timezone.utc).isoformat(),
         "database": {
             "status": "ready",
@@ -103,6 +125,78 @@ def build_handler(
                 if parsed.path == "/api/strategies":
                     self._json(
                         HTTPStatus.OK, {"strategies": strategy_registry.catalog()}
+                    )
+                    return
+                if parsed.path == "/api/signals":
+                    query = parse_qs(parsed.query)
+                    self._json(
+                        HTTPStatus.OK,
+                        {
+                            "signals": SignalRepository(db_path).aggregate(
+                                as_of_date=query.get("as_of_date", [None])[0]
+                            )
+                        },
+                    )
+                    return
+                if parsed.path == "/api/ai-research/overview":
+                    self._json(
+                        HTTPStatus.OK, ResearchRepository(db_path).overview()
+                    )
+                    return
+                if parsed.path == "/api/integrations":
+                    research = ResearchRepository(db_path).overview()
+                    self._json(
+                        HTTPStatus.OK,
+                        {
+                            "components": [
+                                {
+                                    "component": "SQLite",
+                                    "status": "READY",
+                                    "detail": Path(db_path).name,
+                                },
+                                {
+                                    "component": "策略插件",
+                                    "status": "READY",
+                                    "detail": f"{len(strategy_registry.catalog())} 个",
+                                },
+                                *[
+                                    {
+                                        "component": item["provider_id"],
+                                        "status": item["status"],
+                                        "detail": item["mode"],
+                                    }
+                                    for item in research["providers"]
+                                ],
+                                *integration_health(),
+                            ]
+                        },
+                    )
+                    return
+                if parsed.path == "/api/data-center/overview":
+                    snapshot_root = Path(db_path).parent / "snapshots"
+                    self._json(
+                        HTTPStatus.OK,
+                        SnapshotService(db_path, snapshot_root).overview(),
+                    )
+                    return
+                if parsed.path == "/api/governance/signals":
+                    signals = SignalRepository(db_path).aggregate()
+                    self._json(HTTPStatus.OK, signal_governance(signals))
+                    return
+                if parsed.path == "/api/governance/overview":
+                    self._json(
+                        HTTPStatus.OK, GovernanceService(db_path).overview()
+                    )
+                    return
+                if parsed.path == "/api/artifacts":
+                    query = parse_qs(parsed.query)
+                    self._json(
+                        HTTPStatus.OK,
+                        {
+                            "artifacts": ArtifactRepository(db_path).list_latest(
+                                query.get("type", [None])[0]
+                            )
+                        },
                     )
                     return
                 if (
@@ -185,6 +279,17 @@ def build_handler(
                         },
                     )
                     return
+                if len(parts) == 4 and parts[:2] == ["api", "jobs"] and parts[3] == "events":
+                    self._json(
+                        HTTPStatus.OK, {"events": registry.events(parts[2])}
+                    )
+                    return
+                if parsed.path.startswith("/api/"):
+                    self._json(
+                        HTTPStatus.NOT_FOUND,
+                        {"error": f"接口不存在: {parsed.path}"},
+                    )
+                    return
                 self._static(parsed.path)
             except ValueError as exc:
                 self._json(HTTPStatus.NOT_FOUND, {"error": str(exc)})
@@ -201,6 +306,7 @@ def build_handler(
                     and parts[:2] == ["api", "strategies"]
                     and parts[3] == "actions"
                 ):
+                    self._authorize_mutation()
                     self._handle_strategy_action(parts[2], parts[4], body)
                     return
                 legacy_actions = {
@@ -213,9 +319,62 @@ def build_handler(
                 }
                 action = legacy_actions.get(parsed.path)
                 if action:
+                    self._authorize_mutation()
                     self._handle_strategy_action("golden-pit", action, body)
                     return
+                if len(parts) == 4 and parts[:2] == ["api", "jobs"]:
+                    self._authorize_mutation()
+                    control = {
+                        "pause": registry.pause,
+                        "resume": registry.resume,
+                        "cancel": registry.cancel,
+                    }.get(parts[3])
+                    if control is None:
+                        raise ValueError("不支持的任务控制动作")
+                    self._json(HTTPStatus.OK, {"job": control(parts[2])})
+                    return
+                if len(parts) == 5 and parts[:3] == ["api", "ai-research", "reports"]:
+                    self._authorize_mutation()
+                    actions = {
+                        "validate": ResearchReportStatus.VALIDATED,
+                        "review": ResearchReportStatus.IN_REVIEW,
+                        "publish": ResearchReportStatus.PUBLISHED,
+                        "reject": ResearchReportStatus.REJECTED,
+                    }
+                    target = actions.get(parts[4])
+                    if target is None:
+                        raise ValueError("不支持的研究报告动作")
+                    report = ResearchRepository(db_path).transition(
+                        parts[3],
+                        target,
+                        actor=str(body.get("actor") or "local-reviewer"),
+                        note=str(body.get("note") or ""),
+                    )
+                    self._json(HTTPStatus.OK, {"report": report})
+                    return
+                if len(parts) == 5 and parts[:3] == ["api", "governance", "releases"]:
+                    self._authorize_mutation()
+                    targets = {
+                        "validate": ReleaseStatus.VALIDATED,
+                        "shadow": ReleaseStatus.SHADOW,
+                        "production": ReleaseStatus.PRODUCTION,
+                        "disable": ReleaseStatus.DISABLED,
+                        "archive": ReleaseStatus.ARCHIVED,
+                    }
+                    target = targets.get(parts[4])
+                    if target is None:
+                        raise ValueError("不支持的发布治理动作")
+                    release = GovernanceService(db_path).transition(
+                        parts[3],
+                        target,
+                        actor=str(body.get("actor") or ""),
+                        note=str(body.get("note") or ""),
+                    )
+                    self._json(HTTPStatus.OK, {"release": release})
+                    return
                 self._json(HTTPStatus.NOT_FOUND, {"error": "接口不存在"})
+            except PermissionError as exc:
+                self._json(HTTPStatus.FORBIDDEN, {"error": str(exc)})
             except (ValueError, KeyError) as exc:
                 self._json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
             except Exception as exc:  # pragma: no cover - HTTP safety boundary
@@ -245,6 +404,14 @@ def build_handler(
             if not isinstance(value, dict):
                 raise ValueError("请求体必须是 JSON 对象")
             return value
+
+        def _authorize_mutation(self) -> None:
+            expected = os.environ.get("PLATFORM_API_TOKEN", "")
+            if not expected:
+                return
+            supplied = self.headers.get("X-Platform-Token", "")
+            if not hmac.compare_digest(supplied, expected):
+                raise PermissionError("平台变更接口鉴权失败")
 
         @staticmethod
         def _bounded_int(
@@ -318,7 +485,11 @@ def _is_our_service(url: str) -> bool:
     try:
         with urlopen(f"{url}/api/health", timeout=0.5) as response:
             payload = json.load(response)
-        return payload.get("service") == SERVICE_ID and payload.get("status") == "ok"
+        return (
+            payload.get("service") == SERVICE_ID
+            and payload.get("status") == "ok"
+            and payload.get("api_contract_version") == API_CONTRACT_VERSION
+        )
     except (OSError, URLError, ValueError, json.JSONDecodeError):
         return False
 

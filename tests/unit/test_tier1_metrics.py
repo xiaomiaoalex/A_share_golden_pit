@@ -4,8 +4,8 @@ import pytest
 
 from src.screening.tier1_v2.contracts import CorporateAction, DividendEvent
 from src.screening.tier1_v2.metrics import (
-    calculate_latest_fiscal_year_dividend,
     calculate_dividend_ttm,
+    calculate_latest_fiscal_year_dividend,
     compute_self_pe_ttm,
     select_pe_ttm,
 )

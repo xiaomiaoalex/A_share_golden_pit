@@ -17,3 +17,13 @@ __all__ = [
     "UniverseItem",
     "build_point_in_time_provider",
 ]
+__all__ = ["PointInTimeRepository"]
+
+
+def __getattr__(name: str):
+    """Keep core contracts importable without pulling persistence dependencies."""
+    if name == "PointInTimeRepository":
+        from .master_data import PointInTimeRepository
+
+        return PointInTimeRepository
+    raise AttributeError(name)

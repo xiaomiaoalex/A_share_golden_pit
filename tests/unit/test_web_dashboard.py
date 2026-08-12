@@ -2,10 +2,14 @@ import json
 import threading
 from datetime import date
 from http.server import ThreadingHTTPServer
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
+
+import pytest
 
 from config.tier1 import Tier1Config
 from src.data.point_in_time.contracts import DataEnvelope, FetchStatus
+from src.execution import JobRegistry
 from src.screening.tier1_v2.decision import evaluate_tier1
 from src.storage.tier1_repository import Tier1Repository
 from src.strategies.golden_pit.presentation import _tier2_assessment_view
@@ -23,8 +27,9 @@ def test_empty_dashboard_is_ready_for_first_run(tmp_path):
     assert result["next_action"]["key"] == "new"
 
 
-def test_web_startup_prepares_and_verifies_database(tmp_path):
+def test_web_startup_only_verifies_explicitly_migrated_database(tmp_path):
     db_path = tmp_path / "fresh" / "platform.db"
+    Tier1Repository(db_path).migrate_all()
 
     result = prepare_database(db_path)
 
@@ -33,8 +38,16 @@ def test_web_startup_prepares_and_verifies_database(tmp_path):
     assert result["migration_count"] >= 1
 
 
+def test_web_startup_rejects_unmigrated_database(tmp_path):
+    db_path = tmp_path / "unmigrated.db"
+
+    with pytest.raises(RuntimeError, match="main.py migrate"):
+        prepare_database(db_path)
+
+
 def test_health_endpoint_reports_frontend_backend_readiness(tmp_path):
     db_path = tmp_path / "health.db"
+    Tier1Repository(db_path).migrate_all()
     prepare_database(db_path)
     server = ThreadingHTTPServer(("127.0.0.1", 0), build_handler(db_path))
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -51,12 +64,35 @@ def test_health_endpoint_reports_frontend_backend_readiness(tmp_path):
 
     assert result["status"] == "ok"
     assert result["service"] == "a-share-strategy-platform"
+    assert result["api_contract_version"] == 3
     assert result["database"]["status"] == "ready"
     assert result["strategies"]["count"] >= 1
 
 
+def test_unknown_api_returns_json_404_instead_of_html(tmp_path):
+    db_path = tmp_path / "api-404.db"
+    Tier1Repository(db_path).migrate_all()
+    server = ThreadingHTTPServer(("127.0.0.1", 0), build_handler(db_path))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with pytest.raises(HTTPError) as captured:
+            urlopen(f"http://127.0.0.1:{server.server_port}/api/not-real")
+        response = captured.value
+        payload = json.loads(response.read().decode("utf-8"))
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+    assert response.code == 404
+    assert response.headers["Content-Type"].startswith("application/json")
+    assert payload == {"error": "接口不存在: /api/not-real"}
+
+
 def test_startup_reuses_an_existing_platform_process(tmp_path):
     db_path = tmp_path / "reuse.db"
+    Tier1Repository(db_path).migrate_all()
     prepare_database(db_path)
     server, url = _bind_server(db_path, "127.0.0.1", 0)
     assert server is not None
@@ -263,6 +299,155 @@ def test_market_workflow_starts_without_explicit_symbols(tmp_path):
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_platform_exposes_unified_signals_research_and_integrations(tmp_path):
+    db_path = tmp_path / "platform-contracts.db"
+    Tier1Repository(db_path).migrate_all()
+    server = ThreadingHTTPServer(("127.0.0.1", 0), build_handler(db_path))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        base = f"http://127.0.0.1:{server.server_port}"
+        with urlopen(f"{base}/api/signals") as response:
+            signals = json.load(response)
+        with urlopen(f"{base}/api/ai-research/overview") as response:
+            research = json.load(response)
+        with urlopen(f"{base}/api/integrations") as response:
+            integrations = json.load(response)
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert signals == {"signals": []}
+    assert research["datasets"] == []
+    assert research["providers"][0]["provider_id"] == "mock-cn"
+    assert any(item["component"] == "策略插件" for item in integrations["components"])
+
+
+def test_artifact_api_supports_type_filter(tmp_path):
+    from src.artifacts import ArtifactRepository
+
+    db_path = tmp_path / "artifacts-web.db"
+    repository = ArtifactRepository(db_path)
+    repository.migrate()
+    repository.append(
+        artifact_id="portfolio-1",
+        artifact_type="PORTFOLIO",
+        status="FEASIBLE",
+        payload={"weights": {"security-1": 1.0}},
+        created_by="engine",
+    )
+    server = ThreadingHTTPServer(("127.0.0.1", 0), build_handler(db_path))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with urlopen(
+            f"http://127.0.0.1:{server.server_port}/api/artifacts?type=PORTFOLIO"
+        ) as response:
+            payload = json.load(response)
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert payload["artifacts"][0]["artifact_id"] == "portfolio-1"
+
+
+def test_data_center_and_signal_governance_empty_views(tmp_path):
+    db_path = tmp_path / "data-center.db"
+    Tier1Repository(db_path).migrate_all()
+    server = ThreadingHTTPServer(("127.0.0.1", 0), build_handler(db_path))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        base = f"http://127.0.0.1:{server.server_port}"
+        with urlopen(f"{base}/api/data-center/overview") as response:
+            data_center = json.load(response)
+        with urlopen(f"{base}/api/governance/signals") as response:
+            governance = json.load(response)
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert data_center["snapshots"] == []
+    assert data_center["egress_policies"] == []
+    assert governance["signal_count"] == 0
+
+
+def test_mutation_api_requires_configured_platform_token(monkeypatch, tmp_path):
+    import sys
+
+    jobs = JobRegistry(tmp_path / "secured-jobs.db")
+    job = jobs.start([sys.executable, "-c", "import time; time.sleep(2)"], "鉴权任务")
+    monkeypatch.setenv("PLATFORM_API_TOKEN", "secret-token")
+    server = ThreadingHTTPServer(
+        ("127.0.0.1", 0), build_handler(tmp_path / "secured.db", jobs)
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        endpoint = f"http://127.0.0.1:{server.server_port}/api/jobs/{job['job_id']}/cancel"
+        unauthorized = Request(
+            endpoint,
+            data=b"{}",
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with pytest.raises(HTTPError) as error:
+            urlopen(unauthorized)
+        authorized = Request(
+            endpoint,
+            data=b"{}",
+            headers={
+                "Content-Type": "application/json",
+                "X-Platform-Token": "secret-token",
+            },
+            method="POST",
+        )
+        with urlopen(authorized) as response:
+            payload = json.load(response)
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert error.value.code == 403
+    assert payload["job"]["status"] == "CANCELLED"
+
+
+def test_strategy_actions_require_configured_platform_token(monkeypatch, tmp_path):
+    monkeypatch.setenv("PLATFORM_API_TOKEN", "secret-token")
+    class RecordingJobs:
+        command = None
+
+        def start(self, command, label):
+            self.command = command
+            return {"job_id": "job", "status": "RUNNING", "label": label}
+
+        def list(self):
+            return []
+
+    jobs = RecordingJobs()
+    server = ThreadingHTTPServer(
+        ("127.0.0.1", 0), build_handler(tmp_path / "strategy-auth.db", jobs)
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        endpoint = f"http://127.0.0.1:{server.server_port}/api/strategies/golden-pit/actions/run"
+        request = Request(
+            endpoint,
+            data=b'{"value":"payload"}',
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with pytest.raises(HTTPError) as error:
+            urlopen(request)
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert error.value.code == 403
+    assert jobs.command is None
 
 
 def test_resume_endpoint_dispatches_controlled_cli_job(tmp_path):

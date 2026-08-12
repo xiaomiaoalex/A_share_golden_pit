@@ -7,3 +7,5 @@ pandas==2.3.3
 jsonschema==4.26.0
 pytest==9.0.2
 ruff==0.16.2
+duckdb==1.5.5
+psutil==7.2.2

@@ -16,6 +16,10 @@ from src.data.point_in_time.contracts import (
     UniverseItem,
 )
 from src.data.quality import assess_envelope, gate_envelope
+from src.signals import (
+    SignalRepository,
+    materialize_golden_pit_signals,
+)
 from src.strategies.golden_pit.config import Tier1Config
 from src.strategies.golden_pit.persistence.tier1_repository import Tier1Repository
 from src.strategies.golden_pit.versioning import build_release_manifest
@@ -25,8 +29,8 @@ from .decision import DecisionInput, evaluate_tier1
 from .metrics import (
     DividendCalculation,
     FiscalYearDividendCalculation,
-    calculate_latest_fiscal_year_dividend,
     calculate_dividend_ttm,
+    calculate_latest_fiscal_year_dividend,
     compute_self_pe_ttm,
     select_pe_ttm,
 )
@@ -285,7 +289,10 @@ class Tier1Pipeline:
             for index, item in enumerate(universe, start=1):
                 lease_heartbeat.check()
                 attempt_id = self.repository.begin_item_attempt(
-                    run_id, item.symbol, trigger_type
+                    run_id,
+                    item.symbol,
+                    trigger_type,
+                    worker_token=worker_token,
                 )
                 attempt_error = None
                 decision = None
@@ -294,7 +301,10 @@ class Tier1Pipeline:
                     decision = self._screen_stock(run_id, item, as_of_date)
                     lease_heartbeat.check()
                     self.repository.save_decision(
-                        run_id, decision, attempt_id=attempt_id
+                        run_id,
+                        decision,
+                        attempt_id=attempt_id,
+                        worker_token=worker_token,
                     )
                     logger.info(
                         "Tier1 v2 %s/%s %s %s/%s trigger=%s",
@@ -340,7 +350,10 @@ class Tier1Pipeline:
                     )
                     lease_heartbeat.check()
                     self.repository.save_decision(
-                        run_id, decision, attempt_id=attempt_id
+                        run_id,
+                        decision,
+                        attempt_id=attempt_id,
+                        worker_token=worker_token,
                     )
                 except BaseException as exc:
                     attempt_error = exc
@@ -356,6 +369,7 @@ class Tier1Pipeline:
                                 decision.data_status.value if decision else None
                             ),
                             error=attempt_error,
+                            worker_token=worker_token,
                         )
 
             lease_heartbeat.check()
@@ -371,7 +385,9 @@ class Tier1Pipeline:
                 universe_size=len(all_items),
                 price_dates=self.repository.decision_price_dates(run_id),
                 errors=run_errors,
+                worker_token=worker_token,
             )
+            self._publish_unified_signals(run_id, as_of_date)
             return {
                 "run_id": run_id,
                 "status": run_status,
@@ -387,6 +403,27 @@ class Tier1Pipeline:
         finally:
             lease_heartbeat.stop()
             self.repository.release_run_lease(run_id, worker_token)
+
+    def _publish_unified_signals(self, run_id: str, as_of_date: date) -> None:
+        run = self.repository.run_record(run_id) or {}
+        manifest = json.loads(run.get("release_manifest_json") or "{}")
+        with self.repository.connect() as connection:
+            snapshot = connection.execute(
+                "SELECT content_hash FROM screening_universe_snapshots WHERE run_id=?",
+                (run_id,),
+            ).fetchone()
+        signals = materialize_golden_pit_signals(
+            self.repository.decisions(run_id),
+            run_id=run_id,
+            release_id=str(
+                manifest.get("strategy_fingerprint")
+                or manifest.get("calculation_version")
+                or "unknown-release"
+            ),
+            data_snapshot_id=str(snapshot["content_hash"] if snapshot else run_id),
+            as_of_date=as_of_date,
+        )
+        SignalRepository(self.repository.db_path).save(signals)
 
     def _record_and_gate(
         self,

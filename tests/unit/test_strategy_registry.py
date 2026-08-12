@@ -53,10 +53,10 @@ class RecordingJobs:
         return []
 
 
-def test_default_registry_exposes_golden_pit_as_one_strategy(tmp_path):
+def test_default_registry_exposes_two_contract_driven_strategies(tmp_path):
     catalog = build_strategy_registry(tmp_path / "strategies.db").catalog()
 
-    assert [item["id"] for item in catalog] == ["golden-pit"]
+    assert [item["id"] for item in catalog] == ["golden-pit", "high-dividend"]
     assert catalog[0]["ui_module"] == "/strategy-assets/golden-pit/app.js"
     assert catalog[0]["ui_template"] == "/strategy-assets/golden-pit/template.html"
     assert catalog[0]["metrics"][0] == {
@@ -64,6 +64,7 @@ def test_default_registry_exposes_golden_pit_as_one_strategy(tmp_path):
         "label": "覆盖股票",
         "value": 0,
     }
+    assert catalog[1]["ui_module"] == "/strategy-assets/high-dividend/app.js"
 
 
 def test_registry_rejects_duplicate_strategy_ids():

@@ -10,6 +10,7 @@ import sys
 from config.settings import settings
 from src.data.point_in_time.provider_factory import build_point_in_time_provider
 from src.strategies.golden_pit.config import Tier1Config
+from src.strategies.golden_pit.persistence.tier1_repository import Tier1Repository
 from src.strategies.golden_pit.persistence.tier3_repository import Tier3Repository
 from src.strategies.golden_pit.resources import (
     EVIDENCE_SCHEMA,
@@ -17,7 +18,15 @@ from src.strategies.golden_pit.resources import (
     RISK_RULES,
 )
 
-REQUIRED_MODULES = ("pandas", "akshare", "baostock", "tushare", "jsonschema")
+REQUIRED_MODULES = (
+    "pandas",
+    "akshare",
+    "baostock",
+    "tushare",
+    "jsonschema",
+    "duckdb",
+    "psutil",
+)
 SCHEMAS = (EVIDENCE_SCHEMA, RISK_INPUT_SCHEMA, RISK_RULES)
 
 
@@ -44,7 +53,8 @@ def check_schemas() -> None:
 
 def check_database() -> None:
     repository = Tier3Repository(settings.DB_PATH)
-    repository.migrate()
+    if not settings.DB_PATH.is_file():
+        raise RuntimeError("数据库不存在，请先运行 python main.py migrate")
     with repository.connect() as connection:
         versions = {
             row[0]
@@ -52,15 +62,7 @@ def check_database() -> None:
                 "SELECT version FROM schema_migrations"
             ).fetchall()
         }
-    expected = {
-        "001_tier1_v2",
-        "002_tier1_data_quality",
-        "003_tier2_human_ai",
-        "004_tier3_risk_filter",
-        "005_tier1_resume",
-        "006_strategy_identity",
-        "golden-pit:007_execution_integrity",
-    }
+    expected = {version for version, _, _ in Tier1Repository.all_migrations()}
     if not expected.issubset(versions):
         raise RuntimeError(f"数据库迁移不完整: {sorted(expected - versions)}")
 

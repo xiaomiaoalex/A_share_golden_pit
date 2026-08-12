@@ -8,6 +8,7 @@ from http import HTTPStatus
 from pathlib import Path
 from typing import Any
 
+from src.execution.process_control import terminate_strategy_worker
 from src.strategies.contracts import StrategyDescriptor, StrategyOperation
 from src.strategies.golden_pit.persistence.tier2_repository import Tier2Repository
 from src.strategies.golden_pit.persistence.tier3_repository import Tier3Repository
@@ -116,6 +117,9 @@ class GoldenPitStrategy:
             "export-evidence": self._export_evidence,
             "resume": lambda value: self._resume(value, data_retry=False),
             "retry-data": lambda value: self._resume(value, data_retry=True),
+            "pause-run": lambda value: self._control(value, "PAUSE"),
+            "stop-run": lambda value: self._control(value, "STOP"),
+            "resume-run": self._resume_manual,
             "review-stage-b": self._review_stage_b,
             "review-stage-c": self._review_stage_c,
         }
@@ -209,6 +213,43 @@ class GoldenPitStrategy:
             label="黄金坑数据缺口补跑" if data_retry else "黄金坑断点续跑",
             command=tuple(command),
         )
+
+    def _control(self, body: dict[str, Any], action: str) -> StrategyOperation:
+        from src.strategies.golden_pit.persistence.tier1_repository import (
+            Tier1Repository,
+        )
+
+        result = Tier1Repository(self.db_path).control_run(
+            self._required(body, "run_id"),
+            action,
+            actor=self._required(body, "actor"),
+            reason=str(body.get("reason") or "Web 控制台手动操作"),
+        )
+        try:
+            result["worker_terminated"] = terminate_strategy_worker(
+                result.get("process_id"), result["run_id"]
+            )
+        except PermissionError as exc:
+            # The database fence is already authoritative. A suspicious or reused
+            # PID must never turn a successful control decision into an unsafe kill.
+            result["worker_terminated"] = False
+            result["worker_warning"] = str(exc)
+        return StrategyOperation(
+            kind="result", status=HTTPStatus.OK, payload={"run": result}
+        )
+
+    def _resume_manual(self, body: dict[str, Any]) -> StrategyOperation:
+        from src.strategies.golden_pit.persistence.tier1_repository import (
+            Tier1Repository,
+        )
+
+        run_id = self._required(body, "run_id")
+        Tier1Repository(self.db_path).prepare_manual_resume(
+            run_id,
+            actor=self._required(body, "actor"),
+            reason=str(body.get("reason") or "Web 控制台手动恢复"),
+        )
+        return self._resume({"run_id": run_id}, data_retry=False)
 
     def _review_stage_b(self, body: dict[str, Any]) -> StrategyOperation:
         review_id = Tier2Repository(self.db_path).save_human_review(

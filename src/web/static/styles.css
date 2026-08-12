@@ -29,29 +29,43 @@ svg { width: 1.25rem; height: 1.25rem; fill: none; stroke: currentColor; stroke-
 .hidden { display: none !important; }
 
 .app-shell { min-height: 100vh; display: flex; }
-.sidebar { position: fixed; z-index: 30; inset: 0 auto 0 0; width: 250px; padding: 28px 18px 22px; color: rgba(255,255,255,.82); background: linear-gradient(165deg, #0b362e 0%, #082920 58%, #071f19 100%); display: flex; flex-direction: column; box-shadow: 10px 0 30px rgba(6, 31, 25, .08); }
+.sidebar { position: fixed; z-index: 30; inset: 0 auto 0 0; width: 250px; height: 100dvh; min-height: 0; padding: 28px 18px 22px; overflow: hidden; color: rgba(255,255,255,.82); background: linear-gradient(165deg, #0b362e 0%, #082920 58%, #071f19 100%); display: flex; flex-direction: column; box-shadow: 10px 0 30px rgba(6, 31, 25, .08); }
 .sidebar::after { content: ""; position: absolute; left: -90px; bottom: 110px; width: 280px; height: 280px; border: 1px solid rgba(201,154,61,.08); border-radius: 50%; box-shadow: 0 0 0 42px rgba(201,154,61,.025), 0 0 0 86px rgba(201,154,61,.018); pointer-events: none; }
-.brand { position: relative; z-index: 1; display: flex; align-items: center; gap: 12px; padding: 0 9px 30px; border-bottom: 1px solid rgba(255,255,255,.09); }
+.brand { position: relative; z-index: 1; flex: 0 0 auto; display: flex; align-items: center; gap: 12px; padding: 0 9px 24px; border-bottom: 1px solid rgba(255,255,255,.09); }
 .brand-mark { width: 42px; height: 42px; display: grid; place-items: center; color: #f0d595; border: 1px solid rgba(240,213,149,.35); border-radius: 12px; background: rgba(240,213,149,.06); }
 .brand-mark svg { width: 27px; height: 27px; stroke-width: 2; }
 .brand div:last-child { display: grid; gap: 3px; }
 .brand strong { color: #fff; font-family: "STSong", "Songti SC", serif; font-size: 20px; letter-spacing: .12em; }
 .brand span { color: rgba(255,255,255,.42); font-size: 8px; letter-spacing: .16em; }
-.main-nav { position: relative; z-index: 1; display: grid; gap: 7px; padding-top: 25px; }
+.main-nav { position: relative; z-index: 1; flex: 1 1 auto; min-height: 0; display: block; padding: 18px 5px 16px 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
+.main-nav::-webkit-scrollbar { width: 5px; }
+.main-nav::-webkit-scrollbar-track { background: transparent; }
+.main-nav::-webkit-scrollbar-thumb { border-radius: 8px; background: rgba(255,255,255,.16); }
+.main-nav { scrollbar-color: rgba(255,255,255,.16) transparent; scrollbar-width: thin; }
 .nav-item { width: 100%; height: 48px; padding: 0 13px; border: 0; border-radius: 12px; color: rgba(255,255,255,.58); background: transparent; display: flex; align-items: center; gap: 12px; text-align: left; transition: .2s ease; }
 .nav-item svg { width: 19px; height: 19px; }
 .nav-item:hover { color: #fff; background: rgba(255,255,255,.055); }
 .nav-item.active { color: #fff; background: rgba(255,255,255,.105); box-shadow: inset 3px 0 0 #d5ad59; }
 .nav-count { margin-left: auto; min-width: 24px; padding: 2px 7px; color: #f2d99e; border-radius: 20px; background: rgba(213,173,89,.15); font-size: 11px; text-align: center; }
-.strategy-catalog-nav { display: grid; gap: 5px; }
-.strategy-nav { margin-top: 5px; padding-top: 9px; display: grid; gap: 3px; border-top: 1px solid rgba(255,255,255,.08); }
-.strategy-nav .nav-item { height: 42px; padding-left: 18px; font-size: 11px; }
+.nav-group { display: grid; gap: 4px; }
+.strategy-center-group { padding-bottom: 14px; border-bottom: 1px solid rgba(255,255,255,.08); }
+.nav-parent { font-weight: 700; color: rgba(255,255,255,.78); }
+.strategy-catalog-nav { position: relative; display: grid; gap: 3px; margin: 1px 0 0 20px; padding-left: 13px; }
+.strategy-catalog-nav::before { content: ""; position: absolute; top: 3px; bottom: 3px; left: 0; width: 1px; background: rgba(240,213,149,.18); }
+.strategy-catalog-nav .strategy-entry { position: relative; height: 40px; padding: 0 9px; border-radius: 9px; font-size: 11px; }
+.strategy-catalog-nav .strategy-entry::before { content: ""; position: absolute; top: 50%; left: -13px; width: 10px; height: 1px; background: rgba(240,213,149,.18); }
+.strategy-catalog-nav .strategy-entry.active { box-shadow: inset 2px 0 0 #d5ad59; }
+.strategy-catalog-nav .strategy-nav-mark { width: 20px; height: 20px; font-size: 10px; }
+.strategy-nav { margin: 2px 0 4px 34px; padding: 5px 0 0 10px; display: grid; gap: 3px; border-left: 1px dashed rgba(255,255,255,.11); }
+.strategy-nav .nav-item { height: 36px; padding-left: 10px; font-size: 10px; }
 .nav-section-label { padding: 2px 13px 5px; color: rgba(255,255,255,.3); font-size: 8px; font-weight: 750; letter-spacing: .14em; text-transform: uppercase; }
+.platform-section-label { padding-top: 15px; }
+.platform-section-label ~ .nav-item { margin-top: 3px; }
 .strategy-nav-mark { width: 23px; height: 23px; display: grid; place-items: center; color: #f0d595; border: 1px solid rgba(240,213,149,.24); border-radius: 7px; background: rgba(240,213,149,.06); font-family: "STSong", serif; font-weight: 700; }
 .strategy-state-dot { margin-left: auto; width: 6px; height: 6px; border-radius: 50%; background: #5cc59b; box-shadow: 0 0 0 3px rgba(92,197,155,.1); }
 .strategy-state-dot.beta { background: #d8aa55; }
 .strategy-state-dot.paused { background: #82908b; }
-.sidebar-bottom { position: relative; z-index: 1; margin-top: auto; }
+.sidebar-bottom { position: relative; z-index: 1; flex: 0 0 auto; margin-top: 0; padding-top: 12px; border-top: 1px solid rgba(255,255,255,.07); }
 .source-health { padding: 13px; display: flex; gap: 10px; align-items: center; border: 1px solid rgba(255,255,255,.08); border-radius: 12px; background: rgba(255,255,255,.035); }
 .health-dot { flex: 0 0 auto; width: 8px; height: 8px; border-radius: 50%; background: #5cc59b; box-shadow: 0 0 0 4px rgba(92,197,155,.1); }
 .source-health div { min-width: 0; display: grid; gap: 3px; }
@@ -263,8 +277,11 @@ tbody tr:hover { background: #fbfcfb; }
 .recovery-button { min-height: 36px; padding: 0 12px; display: inline-flex; align-items: center; gap: 7px; color: var(--green-700); border: 1px solid #c9ddd6; border-radius: 9px; background: #f3f9f6; font-size: 10px; font-weight: 700; }
 .recovery-button:hover { border-color: var(--green-600); background: #eaf5f0; }
 .recovery-button.warning { color: #8b6121; border-color: #ead7ad; background: #fff9ec; }
+.recovery-button.danger { color: #98453e; border-color: #eccbc7; background: #fff5f3; }
+.recovery-button.danger:hover { border-color: #c66b63; background: #fcede9; }
 .recovery-button svg { width: 15px; height: 15px; }
 .recovery-button span { padding: 2px 6px; border-radius: 10px; background: rgba(0,0,0,.05); font: 9px ui-monospace, monospace; }
+.control-note { color: var(--amber) !important; font-size: 8px !important; }
 .progress-copy { margin-bottom: 8px; display: flex; justify-content: space-between; gap: 16px; align-items: flex-end; }
 .progress-copy strong { color: var(--green-800); font: 650 11px ui-monospace, monospace; }
 .progress-copy span { color: var(--muted); font-size: 10px; text-align: right; }

@@ -39,8 +39,12 @@ class StrategyRegistry:
 def build_strategy_registry(db_path: str | Path) -> StrategyRegistry:
     """Composition root for built-in and installed strategy plugins."""
     from .golden_pit import GoldenPitStrategy
+    from .high_dividend import HighDividendStrategy
 
-    modules: list[StrategyModule] = [GoldenPitStrategy(db_path)]
+    modules: list[StrategyModule] = [
+        GoldenPitStrategy(db_path),
+        HighDividendStrategy(db_path),
+    ]
     discovered = metadata.entry_points()
     entry_points = (
         discovered.select(group="a_share_strategy_platform.strategies")

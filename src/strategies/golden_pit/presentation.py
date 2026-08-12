@@ -129,6 +129,7 @@ class GoldenPitReadModel:
                     """
                 ).fetchall()
             ]
+            self._apply_manual_control_state(connection, runs, tables)
             self._add_run_progress(connection, runs, tables)
             selected_id = run_id or (runs[0]["run_id"] if runs else None)
             if selected_id is None:
@@ -282,8 +283,34 @@ class GoldenPitReadModel:
                     """
                 ).fetchall()
             ]
+            self._apply_manual_control_state(connection, runs, tables)
             self._add_run_progress(connection, runs, tables)
             return runs
+
+    @staticmethod
+    def _apply_manual_control_state(
+        connection: sqlite3.Connection,
+        runs: list[dict[str, Any]],
+        tables: set[str],
+    ) -> None:
+        if "screening_run_control_events" not in tables:
+            return
+        latest = {
+            str(row["run_id"]): dict(row)
+            for row in connection.execute(
+                """
+                SELECT event_id, run_id, action, actor, reason, previous_status,
+                       target_status, worker_process_id, created_at
+                FROM screening_run_control_events e
+                WHERE created_at=(
+                    SELECT MAX(e2.created_at) FROM screening_run_control_events e2
+                    WHERE e2.run_id=e.run_id
+                )
+                """
+            ).fetchall()
+        }
+        for run in runs:
+            run["manual_control"] = latest.get(str(run["run_id"]))
 
     @staticmethod
     def _add_run_progress(

@@ -62,6 +62,56 @@ MIGRATIONS = (
         "008_fiscal_year_dividend_up.sql",
         "Latest complete fiscal-year dividend and immutable decision supersession",
     ),
+    (
+        "golden-pit:009_lease_fencing",
+        "009_lease_fencing_up.sql",
+        "Monotonic worker fencing for all run state commits",
+    ),
+    (
+        "platform:010_research_contracts",
+        "010_research_contracts_up.sql",
+        "Unified signals and governed AI research contracts",
+    ),
+    (
+        "platform:011_point_in_time_foundation",
+        "011_point_in_time_foundation_up.sql",
+        "Permanent security identity, version history and immutable snapshots",
+    ),
+    (
+        "platform:012_governance",
+        "012_governance_up.sql",
+        "Append-only release governance, RBAC and audit events",
+    ),
+    (
+        "platform:013_artifacts",
+        "013_platform_artifacts_up.sql",
+        "Versioned research, backtest, portfolio and governance artifacts",
+    ),
+    (
+        "platform:014_evidence_index",
+        "014_evidence_index_up.sql",
+        "Dataset-scoped keyword and vector evidence retrieval",
+    ),
+    (
+        "platform:015_ai_governance",
+        "015_ai_governance_up.sql",
+        "AI injection, tool, budget and strategy change proposal governance",
+    ),
+    (
+        "platform:016_shadow_oms",
+        "016_shadow_oms_up.sql",
+        "Human-controlled shadow orders, reconciliation and emergency stop",
+    ),
+    (
+        "platform:017_durable_orchestration",
+        "017_durable_orchestration_up.sql",
+        "DAG, retry budget, circuit breaker and dead-letter orchestration",
+    ),
+    (
+        "golden-pit:018_run_controls",
+        "018_run_controls_up.sql",
+        "Audited pause, resume and stop controls with worker fencing",
+    ),
 )
 MIGRATION_VERSION = MIGRATIONS[-1][0]
 
@@ -108,6 +158,32 @@ class Tier1Repository:
         connection.execute("PRAGMA busy_timeout=10000")
         connection.execute("PRAGMA synchronous=NORMAL")
         return connection
+
+    @staticmethod
+    def all_migrations() -> tuple[tuple[str, str, str], ...]:
+        """Return the complete ordered deployment migration contract."""
+        return MIGRATIONS + STAGE_B_MIGRATIONS + STAGE_C_MIGRATIONS
+
+    @staticmethod
+    def _assert_lease_owner(
+        connection: sqlite3.Connection,
+        run_id: str,
+        worker_token: str | None,
+    ) -> None:
+        """Fence stale workers whenever a run is protected by a lease."""
+        lease = connection.execute(
+            """
+            SELECT worker_token, lease_expires_at
+            FROM screening_run_leases WHERE run_id=?
+            """,
+            (run_id,),
+        ).fetchone()
+        if lease is None:
+            return
+        if worker_token is None or str(lease["worker_token"]) != worker_token:
+            raise ValueError("运行写入被 fencing token 拒绝：工作进程不是当前租约所有者")
+        if datetime.fromisoformat(str(lease["lease_expires_at"])) <= datetime.now():
+            raise ValueError("运行租约已过期，旧工作进程不得继续写入")
 
     def migrate(self) -> None:
         self._apply_migrations(MIGRATIONS)
@@ -290,10 +366,13 @@ class Tier1Repository:
         universe_size: int,
         price_dates: Iterable[date] = (),
         errors: Optional[list[str]] = None,
+        worker_token: str | None = None,
     ) -> None:
         dates = sorted(price_dates)
         quality_summary = self.quality_summary(run_id)
         with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self._assert_lease_owner(connection, run_id, worker_token)
             connection.execute(
                 """
                 UPDATE screening_runs
@@ -518,12 +597,28 @@ class Tier1Repository:
                     if (now - latest).total_seconds() < lease_seconds:
                         raise ValueError("运行仍在产生数据，请等待其停止后再续跑")
             expiry = now + timedelta(seconds=lease_seconds)
+            sequence = connection.execute(
+                """
+                SELECT last_fence_token FROM screening_run_lease_sequences
+                WHERE run_id=?
+                """,
+                (run_id,),
+            ).fetchone()
+            fence_token = int(sequence["last_fence_token"]) + 1 if sequence else 1
+            connection.execute(
+                """
+                INSERT INTO screening_run_lease_sequences(run_id, last_fence_token)
+                VALUES (?, ?)
+                ON CONFLICT(run_id) DO UPDATE SET last_fence_token=excluded.last_fence_token
+                """,
+                (run_id, fence_token),
+            )
             connection.execute(
                 """
                 INSERT INTO screening_run_leases(
                     run_id, worker_token, process_id, host_name, acquired_at,
-                    heartbeat_at, lease_expires_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    heartbeat_at, lease_expires_at, fence_token, lease_generation
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     run_id,
@@ -533,6 +628,8 @@ class Tier1Repository:
                     now.isoformat(),
                     now.isoformat(),
                     expiry.isoformat(),
+                    fence_token,
+                    fence_token,
                 ),
             )
             connection.execute(
@@ -568,17 +665,19 @@ class Tier1Repository:
     ) -> None:
         now = datetime.now()
         with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
             cursor = connection.execute(
                 """
                 UPDATE screening_run_leases
                 SET heartbeat_at=?, lease_expires_at=?
-                WHERE run_id=? AND worker_token=?
+                WHERE run_id=? AND worker_token=? AND lease_expires_at>?
                 """,
                 (
                     now.isoformat(),
                     (now + timedelta(seconds=lease_seconds)).isoformat(),
                     run_id,
                     worker_token,
+                    now.isoformat(),
                 ),
             )
             if cursor.rowcount != 1:
@@ -591,13 +690,166 @@ class Tier1Repository:
                 (run_id, worker_token),
             )
 
-    def begin_item_attempt(self, run_id: str, symbol: str, trigger_type: str) -> str:
+    def control_run(
+        self,
+        run_id: str,
+        action: str,
+        *,
+        actor: str,
+        reason: str = "",
+    ) -> dict[str, Any]:
+        """Persist a manual control decision and fence the current worker."""
+        normalized = action.upper()
+        if normalized not in {"PAUSE", "STOP"}:
+            raise ValueError("运行控制动作必须为 PAUSE 或 STOP")
+        if not actor.strip():
+            raise ValueError("运行控制必须记录操作者")
+        target = "PAUSED" if normalized == "PAUSE" else "CANCELLED"
+        now = datetime.now()
+        controller_token = f"controller:{normalized.lower()}:{uuid.uuid4()}"
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            run = connection.execute(
+                "SELECT status FROM screening_runs WHERE run_id=?", (run_id,)
+            ).fetchone()
+            if run is None:
+                raise ValueError(f"未知Tier1 run_id: {run_id}")
+            previous = str(run["status"])
+            allowed = {"RUNNING"} if normalized == "PAUSE" else {"RUNNING", "PAUSED"}
+            if previous not in allowed:
+                raise ValueError("运行当前状态不允许此控制操作")
+            lease = connection.execute(
+                "SELECT process_id FROM screening_run_leases WHERE run_id=?",
+                (run_id,),
+            ).fetchone()
+            process_id = int(lease["process_id"]) if lease and lease["process_id"] else None
+            sequence = connection.execute(
+                """
+                SELECT last_fence_token FROM screening_run_lease_sequences
+                WHERE run_id=?
+                """,
+                (run_id,),
+            ).fetchone()
+            fence_token = int(sequence["last_fence_token"]) + 1 if sequence else 1
+            connection.execute(
+                """
+                INSERT INTO screening_run_lease_sequences(run_id, last_fence_token)
+                VALUES (?, ?)
+                ON CONFLICT(run_id) DO UPDATE SET
+                    last_fence_token=excluded.last_fence_token
+                """,
+                (run_id, fence_token),
+            )
+            connection.execute(
+                """
+                INSERT INTO screening_run_leases(
+                    run_id, worker_token, process_id, host_name, acquired_at,
+                    heartbeat_at, lease_expires_at, fence_token, lease_generation
+                ) VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(run_id) DO UPDATE SET
+                    worker_token=excluded.worker_token,
+                    process_id=NULL,
+                    host_name=excluded.host_name,
+                    acquired_at=excluded.acquired_at,
+                    heartbeat_at=excluded.heartbeat_at,
+                    lease_expires_at=excluded.lease_expires_at,
+                    fence_token=excluded.fence_token,
+                    lease_generation=excluded.lease_generation
+                """,
+                (
+                    run_id,
+                    controller_token,
+                    socket.gethostname(),
+                    now.isoformat(),
+                    now.isoformat(),
+                    (now + timedelta(days=3650)).isoformat(),
+                    fence_token,
+                    fence_token,
+                ),
+            )
+            connection.execute(
+                """
+                UPDATE screening_runs SET status=?, finished_at=?
+                WHERE run_id=? AND status=?
+                """,
+                (target, now.isoformat(), run_id, previous),
+            )
+            connection.execute(
+                """
+                INSERT INTO screening_run_control_events(
+                    event_id, run_id, action, actor, reason, previous_status,
+                    target_status, worker_process_id, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(uuid.uuid4()), run_id, normalized, actor.strip(), reason.strip(),
+                    previous, target, process_id, now.isoformat(),
+                ),
+            )
+        return {
+            "run_id": run_id,
+            "action": normalized,
+            "status": target,
+            "process_id": process_id,
+        }
+
+    def prepare_manual_resume(
+        self, run_id: str, *, actor: str, reason: str = ""
+    ) -> None:
+        """Release only a manual pause fence before enqueuing an in-place resume."""
+        if not actor.strip():
+            raise ValueError("恢复运行必须记录操作者")
+        now = datetime.now().isoformat()
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            run = connection.execute(
+                "SELECT status FROM screening_runs WHERE run_id=?", (run_id,)
+            ).fetchone()
+            if run is None or str(run["status"]) != "PAUSED":
+                raise ValueError("只有手动暂停的运行可以恢复")
+            lease = connection.execute(
+                "SELECT worker_token FROM screening_run_leases WHERE run_id=?",
+                (run_id,),
+            ).fetchone()
+            if lease is None or not str(lease["worker_token"]).startswith(
+                "controller:pause:"
+            ):
+                raise ValueError("暂停控制记录缺失，拒绝不安全恢复")
+            connection.execute(
+                "DELETE FROM screening_run_leases WHERE run_id=?", (run_id,)
+            )
+            connection.execute(
+                """
+                UPDATE screening_runs SET status='INTERRUPTED', finished_at=?
+                WHERE run_id=? AND status='PAUSED'
+                """,
+                (now, run_id),
+            )
+            connection.execute(
+                """
+                INSERT INTO screening_run_control_events(
+                    event_id, run_id, action, actor, reason, previous_status,
+                    target_status, worker_process_id, created_at
+                ) VALUES (?, ?, 'RESUME', ?, ?, 'PAUSED', 'INTERRUPTED', NULL, ?)
+                """,
+                (str(uuid.uuid4()), run_id, actor.strip(), reason.strip(), now),
+            )
+
+    def begin_item_attempt(
+        self,
+        run_id: str,
+        symbol: str,
+        trigger_type: str,
+        *,
+        worker_token: str | None = None,
+    ) -> str:
         if trigger_type not in {"INITIAL", "RESUME", "DATA_RETRY"}:
             raise ValueError(f"无效补跑触发类型: {trigger_type}")
         attempt_id = str(uuid.uuid4())
         now = datetime.now().isoformat()
         with self.connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
+            self._assert_lease_owner(connection, run_id, worker_token)
             item = connection.execute(
                 """
                 SELECT attempt_count FROM screening_run_universe
@@ -636,6 +888,7 @@ class Tier1Repository:
         decision_status: str | None = None,
         data_status: str | None = None,
         error: BaseException | None = None,
+        worker_token: str | None = None,
     ) -> None:
         now = datetime.now().isoformat()
         with self.connect() as connection:
@@ -645,6 +898,9 @@ class Tier1Repository:
             ).fetchone()
             if attempt is None:
                 raise ValueError(f"未知逐股尝试: {attempt_id}")
+            self._assert_lease_owner(
+                connection, str(attempt["run_id"]), worker_token
+            )
             failed = error is not None
             error_type = type(error).__name__ if error is not None else None
             error_message = str(error) if error is not None else None
@@ -725,7 +981,7 @@ class Tier1Repository:
             connection.execute(
                 """
                 UPDATE screening_runs SET status='INTERRUPTED', finished_at=?,
-                    error_summary_json=? WHERE run_id=?
+                    error_summary_json=? WHERE run_id=? AND status='RUNNING'
                 """,
                 (
                     datetime.now().isoformat(),
@@ -1090,6 +1346,7 @@ class Tier1Repository:
         decision: Tier1Decision,
         *,
         attempt_id: str | None = None,
+        worker_token: str | None = None,
     ) -> str:
         """Append an immutable decision version and refresh the current snapshot."""
         decision_id = str(uuid.uuid4())
@@ -1097,6 +1354,7 @@ class Tier1Repository:
         decision_hash = hashlib.sha256(decision_json.encode("utf-8")).hexdigest()
         with self.connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
+            self._assert_lease_owner(connection, run_id, worker_token)
             if attempt_id is not None:
                 attempt = connection.execute(
                     """
