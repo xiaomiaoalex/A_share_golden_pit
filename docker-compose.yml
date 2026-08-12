@@ -1,7 +1,7 @@
 services:
-  golden-pit:
+  strategy-platform:
     build: .
-    container_name: golden-pit-db
+    container_name: ashare-strategy-platform
     volumes:
       # 持久化数据
       - ./data:/app/data
@@ -12,5 +12,5 @@ services:
     # 交互式运行，便于执行命令
     stdin_open: true
     tty: true
-    # 默认进入bash，按正式Stage A/B/C命令手动执行
+    # 默认进入bash，按平台或策略命令手动执行
     command: /bin/bash

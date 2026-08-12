@@ -1,7 +1,8 @@
-# A股黄金坑股票数据库
+# A股多策略选股研究平台
 
-以“重仓长周期确定性的高赔率”为第一原则，持续识别长期价值仍在、但价格因阶段性
-悲观而明显错位的A股公司。当前正式策略采用“量化初筛—证据研究—风险终审”工作流。
+面向持续扩展的选股策略平台：数据采集、证据校验、任务执行和 Web 外壳由平台共享，
+每个策略独立维护规则、持久化适配、结果投影与展示模块。当前首个正式策略“黄金坑”
+用于识别长期价值仍在、但价格因阶段性悲观而明显错位的 A 股公司。
 
 ## 正式研究链路
 
@@ -38,7 +39,7 @@ python main.py resume-tier1 --run-id RUN_ID
 python main.py retry-tier1-data --run-id RUN_ID
 ```
 
-完整口径见 [量化初筛说明](docs/stage_a_tier1_v2.md)。
+完整口径见 [量化初筛说明](docs/strategies/golden_pit/quantitative_screening.md)。
 
 ## 证据研究（Tier2）
 
@@ -59,8 +60,7 @@ python main.py import-tier2 --file ai_results.json
 python main.py review-tier2 --run-id RUN_ID
 ```
 
-完整契约见 [证据研究说明](docs/stage_b_tier2_human_ai.md) 和
-[研究提示词](docs/tier2_ai_prompt_template.md)。
+完整契约见 [证据研究说明](docs/strategies/golden_pit/evidence_research.md)。
 
 ## 风险终审（Tier3）
 
@@ -79,7 +79,7 @@ python main.py import-tier3 --file filled_tier3_results.json
 python main.py review-tier3 --run-id RUN_ID
 ```
 
-完整规则见 [风险终审说明](docs/stage_c_tier3_risk_filter.md)。
+完整规则见 [风险终审说明](docs/strategies/golden_pit/risk_review.md)。
 
 ## 快速开始
 
@@ -88,15 +88,16 @@ python -m venv venv
 # Linux/macOS: source venv/bin/activate
 # Windows: venv\Scripts\activate
 python -m pip install -r requirements.txt
-python main.py tier3-migrate
+python main.py strategy list
+python main.py strategy golden-pit tier3-migrate
 python deploy_check.py
 ```
 
 启动新的正式工作流，或检查已有运行：
 
 ```bash
-python main.py workflow --as-of 2026-08-10 --symbols 000651 600519
-python main.py workflow --run-id RUN_ID
+python main.py strategy golden-pit workflow --as-of 2026-08-10 --symbols 000651 600519
+python main.py strategy golden-pit workflow --run-id RUN_ID
 ```
 
 `workflow` 会汇总A/B/C状态并给出下一条受控操作，不会自动越过AI研究或人工复核。
@@ -115,7 +116,7 @@ python web_app.py
 浏览器默认打开 `http://127.0.0.1:8765`。如需指定数据库、端口或禁止自动打开浏览器：
 
 ```bash
-python web_app.py --db data/db/golden_pit.db --port 9000 --no-browser
+python web_app.py --db data/db/strategy_platform.db --port 9000 --no-browser
 ```
 
 控制台默认仅监听本机回环地址。筛选和证据包导出在后台执行，可在“运行记录”查看
@@ -154,7 +155,8 @@ Web 控制台会在运行停止且租约过期后显示“从断点继续”；�
 | BaoStock | 沪深历史行情、PE、每日ST、分红和送转 | 不用于近似季度财务趋势 |
 | SQLite | 运行、原始观察、血缘、质量、评估和人工复核 | 追加式版本迁移 |
 
-默认顺序由 `TIER1_DATA_SOURCES=akshare,tushare,baostock` 控制。当前筛选可采用通过
+默认顺序由 `GOLDEN_PIT_DATA_SOURCES=akshare,tushare,baostock` 控制；旧变量
+`TIER1_DATA_SOURCES` 仍作为兼容别名。当前筛选可采用通过
 字段契约验证的供应商PE；历史回扫采用点时自计算并同时保存供应商值和自计算值。
 
 ## 正式CLI

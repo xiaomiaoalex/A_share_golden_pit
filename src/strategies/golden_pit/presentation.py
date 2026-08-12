@@ -57,6 +57,7 @@ class GoldenPitReadModel:
                     SELECT run_id, as_of_date, status, started_at, finished_at,
                            universe_size, calculation_version
                     FROM screening_runs
+                    WHERE strategy_id='golden-pit'
                     ORDER BY started_at DESC, rowid DESC LIMIT 30
                     """
                 ).fetchall()
@@ -67,7 +68,8 @@ class GoldenPitReadModel:
                 return self._empty_overview(runs)
 
             run_row = connection.execute(
-                "SELECT * FROM screening_runs WHERE run_id=?", (selected_id,)
+                "SELECT * FROM screening_runs WHERE run_id=? AND strategy_id='golden-pit'",
+                (selected_id,),
             ).fetchone()
             if run_row is None:
                 raise ValueError(f"未找到运行记录: {selected_id}")
@@ -152,7 +154,8 @@ class GoldenPitReadModel:
                     """
                     SELECT run_id, as_of_date, status, started_at, finished_at,
                            universe_size, calculation_version
-                    FROM screening_runs WHERE status='RUNNING'
+                    FROM screening_runs
+                    WHERE strategy_id='golden-pit' AND status='RUNNING'
                     ORDER BY started_at DESC, rowid DESC
                     """
                 ).fetchall()

@@ -8,13 +8,18 @@ from src.risk.tier3 import RiskModelRegistry, Tier3RiskImporter, Tier3TemplateEx
 from src.screening.tier2_human_ai import Tier2AssessmentImporter
 from src.storage.tier2_repository import Tier2Repository
 from src.storage.tier3_repository import Tier3Repository
+from src.strategies.golden_pit.resources import (
+    EVIDENCE_SCHEMA,
+    RISK_INPUT_SCHEMA,
+    RISK_RULES,
+)
 from tests.unit.test_tier2_human_ai import _assessment, _export_one
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _registry():
-    return RiskModelRegistry(PROJECT_ROOT / "config" / "tier3_risk_rules.json")
+    return RiskModelRegistry(RISK_RULES)
 
 
 def _stage_b_human_pass(tmp_path):
@@ -22,9 +27,7 @@ def _stage_b_human_pass(tmp_path):
     run_id, _, package = _export_one(tier2, tmp_path)
     source = tmp_path / "tier2-pass.json"
     source.write_text(json.dumps(_assessment(package), ensure_ascii=False), encoding="utf-8")
-    imported = Tier2AssessmentImporter(
-        tier2, PROJECT_ROOT / "config" / "tier2_ai_schema.json"
-    ).import_file(source)
+    imported = Tier2AssessmentImporter(tier2, EVIDENCE_SCHEMA).import_file(source)
     tier2.save_human_review(
         assessment_id=imported["assessment_ids"][0],
         decision="PASS",
@@ -103,7 +106,7 @@ def _import(repository, tmp_path, payload, name="tier3-result.json"):
     return Tier3RiskImporter(
         repository,
         _registry(),
-        PROJECT_ROOT / "config" / "tier3_risk_input_schema.json",
+        RISK_INPUT_SCHEMA,
     ).import_file(path)
 
 

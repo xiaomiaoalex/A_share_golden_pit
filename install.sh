@@ -1,10 +1,10 @@
 #!/bin/bash
-# A股黄金坑股票数据库正式 Stage A/B/C 安装脚本
+# A股多策略选股研究平台安装脚本
 
 set -e
 
 echo "=========================================="
-echo "  A股黄金坑股票数据库 - 安装程序"
+echo "  A股多策略选股研究平台 - 安装程序"
 echo "=========================================="
 
 if command -v python3 &> /dev/null; then
@@ -37,7 +37,7 @@ fi
 
 "$PYTHON" -m pip install --upgrade pip -q
 "$PYTHON" -m pip install -r requirements.txt -q
-"$PYTHON" main.py tier3-migrate
+"$PYTHON" main.py strategy golden-pit tier3-migrate
 "$PYTHON" deploy_check.py
 
 cat > run.sh << 'EOF'
@@ -60,5 +60,5 @@ EOF
 
 echo
 echo "安装完成。正式入口："
-echo "  ./run.sh workflow --as-of YYYY-MM-DD --symbols 000651"
-echo "  ./run.sh workflow --run-id RUN_ID"
+echo "  ./run.sh strategy golden-pit workflow --as-of YYYY-MM-DD --symbols 000651"
+echo "  ./run.sh strategy golden-pit workflow --run-id RUN_ID"

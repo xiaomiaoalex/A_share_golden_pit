@@ -3,6 +3,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+import main as platform_cli
 from main import _load_universe_file, _normalize_symbol, build_parser
 
 
@@ -43,3 +44,21 @@ def test_removed_legacy_commands_are_unrecognized(command):
     with pytest.raises(SystemExit) as exc:
         build_parser().parse_args([command])
     assert exc.value.code == 2
+
+
+def test_platform_strategy_namespace_routes_to_golden_pit(monkeypatch):
+    captured = []
+    monkeypatch.setattr(
+        platform_cli,
+        "golden_pit_main",
+        lambda: captured.append(list(platform_cli.sys.argv)),
+    )
+    monkeypatch.setattr(
+        platform_cli.sys,
+        "argv",
+        ["main.py", "strategy", "golden-pit", "workflow", "--help"],
+    )
+
+    platform_cli.main()
+
+    assert captured == [["main.py", "workflow", "--help"]]

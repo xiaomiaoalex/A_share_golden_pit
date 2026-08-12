@@ -12,7 +12,7 @@ from typing import Optional
 
 import pandas as pd
 
-from src.screening.tier1_v2.contracts import (
+from src.data.point_in_time.models import (
     CorporateAction,
     DividendEvent,
     MarketSnapshot,

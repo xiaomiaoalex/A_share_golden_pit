@@ -151,11 +151,25 @@ def test_existing_stage_a_database_upgrades_to_quality_migration(tmp_path):
             for row in connection.execute("SELECT version FROM schema_migrations")
         }
     assert "data_quality_summary_json" in columns
+    assert "strategy_id" in columns
     assert versions == {
         "001_tier1_v2",
         "002_tier1_data_quality",
         "005_tier1_resume",
+        "006_strategy_identity",
     }
+
+
+def test_new_runs_are_owned_by_golden_pit_strategy(tmp_path):
+    repository = Tier1Repository(tmp_path / "strategy.db")
+    run_id = repository.begin_run(date(2026, 8, 10), Tier1Config())
+
+    with repository.connect() as connection:
+        row = connection.execute(
+            "SELECT strategy_id FROM screening_runs WHERE run_id=?", (run_id,)
+        ).fetchone()
+
+    assert row["strategy_id"] == "golden-pit"
 
 
 def test_source_verification_cannot_bind_to_mismatched_run(tmp_path):

@@ -17,6 +17,7 @@ from src.screening.tier2_human_ai import (
 )
 from src.screening.tier2_human_ai.constants import DIMENSIONS, SCENARIOS
 from src.storage.tier2_repository import Tier2Repository
+from src.strategies.golden_pit.resources import EVIDENCE_SCHEMA
 from tests.unit.test_tier1_decision import decision_input
 
 
@@ -96,7 +97,7 @@ def _assessment(package, verdict="PASS"):
 
 
 def _importer(repository):
-    return Tier2AssessmentImporter(repository, "config/tier2_ai_schema.json")
+    return Tier2AssessmentImporter(repository, EVIDENCE_SCHEMA)
 
 
 def test_export_only_tier1_pass_and_marks_missing_evidence(tmp_path):

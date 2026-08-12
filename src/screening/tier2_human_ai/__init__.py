@@ -1,10 +1,3 @@
-"""Stage B: evidence-bound human-AI Tier2 research workflow."""
+"""Deprecated compatibility namespace for Golden Pit evidence research."""
 
-from .assessment import Tier2AssessmentImporter, derive_system_recommendation
-from .evidence import Tier2EvidenceExporter
-
-__all__ = [
-    "Tier2AssessmentImporter",
-    "Tier2EvidenceExporter",
-    "derive_system_recommendation",
-]
+from src.strategies.golden_pit.evidence_research import *  # noqa: F401,F403

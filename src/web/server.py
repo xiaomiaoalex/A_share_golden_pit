@@ -29,7 +29,7 @@ def build_handler(
     strategy_registry = strategies or build_strategy_registry(db_path)
 
     class ConsoleHandler(BaseHTTPRequestHandler):
-        server_version = "GoldenPitConsole/1.0"
+        server_version = "StrategyResearchPlatform/1.0"
 
         def log_message(self, fmt: str, *args: Any) -> None:
             sys.stderr.write("[web] " + fmt % args + "\n")
@@ -86,7 +86,11 @@ def build_handler(
             try:
                 body = self._body()
                 parts = parsed.path.strip("/").split("/")
-                if len(parts) == 5 and parts[:2] == ["api", "strategies"] and parts[3] == "actions":
+                if (
+                    len(parts) == 5
+                    and parts[:2] == ["api", "strategies"]
+                    and parts[3] == "actions"
+                ):
                     self._handle_strategy_action(parts[2], parts[4], body)
                     return
                 legacy_actions = {
@@ -133,15 +137,28 @@ def build_handler(
             return value
 
         def _static(self, path: str) -> None:
+            if path.startswith("/strategy-assets/"):
+                parts = unquote(path).strip("/").split("/")
+                if len(parts) < 3 or ".." in parts:
+                    self.send_error(HTTPStatus.NOT_FOUND)
+                    return
+                module = strategy_registry.get(parts[1])
+                self._send_file(module.asset_root, Path(*parts[2:]))
+                return
             relative = "index.html" if path in {"", "/"} else unquote(path.lstrip("/"))
-            allowed = (
-                relative in {"index.html", "styles.css", "app.js"}
-                or relative.startswith("strategies/") and relative.endswith(".js")
-            )
+            allowed = relative in {"index.html", "styles.css", "app.js"}
             if not allowed or ".." in Path(relative).parts:
                 self.send_error(HTTPStatus.NOT_FOUND)
                 return
-            file_path = STATIC_ROOT / relative
+            self._send_file(STATIC_ROOT, Path(relative))
+
+        def _send_file(self, root: Path, relative: Path) -> None:
+            file_path = (root / relative).resolve()
+            try:
+                file_path.relative_to(root.resolve())
+            except ValueError:
+                self.send_error(HTTPStatus.NOT_FOUND)
+                return
             if not file_path.is_file():
                 self.send_error(HTTPStatus.NOT_FOUND)
                 return
