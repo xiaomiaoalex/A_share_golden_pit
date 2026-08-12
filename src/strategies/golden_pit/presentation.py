@@ -24,6 +24,64 @@ def _json(value: Any, default: Any) -> Any:
         return default
 
 
+def _tier2_assessment_view(value: Any) -> dict[str, Any] | None:
+    """Project validated Tier2 JSON into a browser-safe research read model."""
+
+    assessment = _json(value, {})
+    if not isinstance(assessment, dict) or not assessment:
+        return None
+
+    dimensions = []
+    for item in assessment.get("dimensions", []):
+        if not isinstance(item, dict):
+            continue
+        sources = []
+        for source in item.get("sources", []):
+            if not isinstance(source, dict):
+                continue
+            # Do not expose immutable local paths, hashes or full evidence excerpts
+            # to the browser.  The import boundary has already verified those fields.
+            sources.append(
+                {
+                    "title": source.get("title"),
+                    "publisher": source.get("publisher"),
+                    "date": source.get("date"),
+                    "page_or_section": source.get("page_or_section"),
+                }
+            )
+        dimensions.append(
+            {
+                "dimension": item.get("dimension"),
+                "verdict": item.get("verdict"),
+                "confidence": item.get("confidence"),
+                "facts": item.get("facts", []),
+                "inferences": item.get("inferences", []),
+                "counter_evidence": item.get("counter_evidence", []),
+                "reasoning_summary": item.get("reasoning_summary"),
+                "falsification_conditions": item.get(
+                    "falsification_conditions", []
+                ),
+                "sources": sources,
+            }
+        )
+
+    return {
+        "schema_version": assessment.get("schema_version"),
+        "ai_provider": assessment.get("ai_provider"),
+        "ai_model": assessment.get("ai_model"),
+        "recommendation": assessment.get("recommendation"),
+        "dimensions": dimensions,
+        "scenario_analysis": assessment.get("scenario_analysis", []),
+        "overall_reasoning": assessment.get("overall_reasoning"),
+        "overall_counter_evidence": assessment.get(
+            "overall_counter_evidence", []
+        ),
+        "falsification_conditions": assessment.get(
+            "falsification_conditions", []
+        ),
+    }
+
+
 class GoldenPitReadModel:
     """Project formal golden-pit workflow tables into strategy-owned views."""
 
@@ -823,7 +881,8 @@ class GoldenPitReadModel:
                     ORDER BY h2.reviewed_at DESC, h2.rowid DESC LIMIT 1)
             )
             SELECT p.symbol, p.package_id, p.coverage_status, p.missing_sections_json,
-                   a.assessment_id, a.ai_recommendation, a.system_recommendation,
+                   a.assessment_id, a.ai_provider, a.ai_model, a.imported_at,
+                   a.ai_recommendation, a.system_recommendation, a.assessment_json,
                    h.decision AS human_decision, h.reviewer, h.rationale, h.reviewed_at
             FROM latest_package p
             LEFT JOIN latest_ai a ON a.package_id=p.package_id
@@ -835,6 +894,9 @@ class GoldenPitReadModel:
         for raw in rows:
             row = dict(raw)
             row["missing_sections"] = _json(row.pop("missing_sections_json"), [])
+            row["assessment"] = _tier2_assessment_view(
+                row.pop("assessment_json", None)
+            )
             result[str(row["symbol"])] = row
         return result
 

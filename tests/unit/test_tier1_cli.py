@@ -1,3 +1,4 @@
+from datetime import date
 from pathlib import Path
 
 import pandas as pd
@@ -5,6 +6,7 @@ import pytest
 
 import main as platform_cli
 from main import _load_universe_file, _normalize_symbol, build_parser
+from src.strategies.golden_pit.cli import _requires_point_in_time_universe
 
 
 @pytest.mark.parametrize(
@@ -29,6 +31,21 @@ def test_universe_file_deduplicates_symbols(tmp_path: Path):
     items = _load_universe_file(str(path))
     assert [item.symbol for item in items] == ["000001", "920001"]
     assert [item.exchange for item in items] == ["SZ", "BJ"]
+
+
+def test_recent_date_does_not_require_historical_universe_file():
+    assert not _requires_point_in_time_universe(
+        date(2026, 8, 10), date(2026, 8, 11), 7
+    )
+    assert not _requires_point_in_time_universe(
+        date(2026, 8, 4), date(2026, 8, 11), 7
+    )
+
+
+def test_date_outside_recent_window_requires_point_in_time_universe():
+    assert _requires_point_in_time_universe(
+        date(2026, 8, 3), date(2026, 8, 11), 7
+    )
 
 
 def test_help_exposes_only_formal_workflow():

@@ -19,6 +19,7 @@ class UniverseProvider:
         self.provider_name = provider_name
         self.symbols = symbols
         self.today = date(2026, 8, 10)
+        self.current_window_days = 7
         self.call_count = 0
 
     def get_universe(self, as_of_date):
@@ -112,6 +113,17 @@ def test_historical_universe_fails_closed_without_exact_source():
     assert result.error_type == "NO_QUALIFIED_SOURCE"
     assert akshare.call_count == 0
     assert baostock.call_count == 0
+
+
+def test_recent_universe_can_use_current_limited_source():
+    limited = UniverseProvider("AKShare", ["000001"])
+    provider = FallbackPointInTimeProvider(limited)
+
+    result = provider.get_universe(date(2026, 8, 9))
+
+    assert result.provider == "AKShare"
+    assert [item.symbol for item in result.data] == ["000001"]
+    assert limited.call_count == 1
 
 
 def test_exact_capability_is_preferred_over_configured_limited_source():

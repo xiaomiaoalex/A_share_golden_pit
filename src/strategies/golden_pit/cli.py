@@ -6,7 +6,7 @@ import json
 import logging
 import re
 import sys
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 import pandas as pd
@@ -203,6 +203,13 @@ def _parse_as_of(value: str) -> date:
         raise ValueError("--as-of 必须是有效的 YYYY-MM-DD 日期") from exc
 
 
+def _requires_point_in_time_universe(
+    as_of_date: date, today: date, current_window_days: int
+) -> bool:
+    """Only dates outside the operational recent window require a PIT universe."""
+    return as_of_date < today - timedelta(days=current_window_days)
+
+
 def _normalize_symbol(value: object) -> str:
     raw = str(value).strip().upper()
     if raw.endswith((".SH", ".SZ", ".BJ")):
@@ -269,10 +276,15 @@ def _run_tier1_command(args) -> dict:
     provider = build_point_in_time_provider(tier1_config)
     if as_of_date > provider.today:
         raise ValueError("--as-of 不得晚于当前日期")
-    historical_universe = as_of_date < provider.today
+    historical_universe = _requires_point_in_time_universe(
+        as_of_date,
+        provider.today,
+        tier1_config.current_supplier_window_days,
+    )
     if historical_universe and not args.universe_file and not args.symbols:
         raise ValueError(
-            "历史全市场筛选必须通过--universe-file提供点时股票池；"
+            f"早于近{tier1_config.current_supplier_window_days}日窗口的全市场筛选"
+            "必须通过--universe-file提供点时股票池；"
             "也可用--symbols做指定股票历史复算"
         )
     universe_items = _load_universe_file(args.universe_file) if args.universe_file else None

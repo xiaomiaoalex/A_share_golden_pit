@@ -8,7 +8,7 @@ provider so an upstream failure is not silently hidden.
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import date
+from datetime import date, timedelta
 from time import monotonic
 
 from src.data.quality.registry import capability_for
@@ -29,6 +29,10 @@ class FallbackPointInTimeProvider:
             raise ValueError("至少需要一个点时数据提供方")
         self.providers = providers
         self.today = providers[0].today
+        self.current_window_days = min(
+            int(getattr(provider, "current_window_days", 0))
+            for provider in providers
+        )
         self.configuration_warnings = list(configuration_warnings or [])
         self.circuit_failure_threshold = max(1, circuit_failure_threshold)
         self.circuit_cooldown_seconds = max(0.0, circuit_cooldown_seconds)
@@ -163,7 +167,7 @@ class FallbackPointInTimeProvider:
         )
 
     def get_universe(self, as_of_date: date):
-        if as_of_date < self.today:
+        if as_of_date < self.today - timedelta(days=self.current_window_days):
             exact = [
                 provider
                 for provider in self.providers

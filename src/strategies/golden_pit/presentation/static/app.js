@@ -26,7 +26,9 @@ const statusLabels = {
 
 function mount() {
   bindEvents();
-  $('[name="as_of"]').value = new Date().toISOString().slice(0, 10);
+  const now = new Date();
+  const localDate = new Date(now.getTime() - now.getTimezoneOffset() * 60_000);
+  $('[name="as_of"]').value = localDate.toISOString().slice(0, 10);
 }
 
 function bindEvents() {
@@ -292,6 +294,7 @@ function openDrawer(symbol) {
     <section class="detail-section"><h3>核心指标</h3><div class="detail-kpis"><div class="detail-kpi"><span>PE (TTM)</span><strong>${number(c.pe_ttm, '×')}</strong></div><div class="detail-kpi"><span>股息率 TTM</span><strong>${percent(c.dividend_yield)}</strong></div><div class="detail-kpi"><span>风险警示</span><strong>${c.risk_warning ? '是' : '否'}</strong></div></div></section>
     <section class="detail-section"><h3>连续单季度同比趋势</h3>${trendChart(c)}<div class="chart-legend"><span><i></i>营业收入</span><span class="profit"><i></i>归母净利润</span></div></section>
     <section class="detail-section"><h3>量化初筛条件</h3><div class="condition-list">${condition('PE (TTM) < 15', pePass, number(c.pe_ttm, '×'))}${condition('税前股息率 (TTM) > 5%', divPass, percent(c.dividend_yield))}${condition(revenueRule, revPass, sequence(c.revenue_yoy))}${condition(profitRule, profitPass, sequence(c.profit_yoy))}${condition('非 ST / 风险警示', !c.risk_warning, c.risk_warning ? '风险警示' : '正常')}</div></section>
+    ${tier2Research(c.stage_b)}
     ${c.quality_warnings.length ? `<section class="detail-section"><h3>数据提示</h3><ul class="warning-list">${c.quality_warnings.map(item => `<li>${esc(item)}</li>`).join('')}</ul></section>` : ''}
     <section class="detail-section"><h3>研究阶段</h3><div class="stage-timeline">${stageLine('A', '量化初筛', c.screen_status)}${stageLine('B', '证据研究', c.stage_b_status)}${stageLine('C', '风险终审', c.stage_c_status)}</div></section>`;
   renderDrawerFooter(c);
@@ -364,7 +367,7 @@ function updateWorkflowScope() {
   $('#workflowSubmit').textContent = market ? '开始全市场筛选' : '启动指定股票筛选';
   $('#workflowNoticeTitle').textContent = market ? '将扫描全市场股票池' : '将筛选指定股票';
   $('#workflowNoticeDetail').textContent = market
-    ? '任务会访问已配置的数据源并在后台运行，股票数量较多时可能需要较长时间。历史日期需要具备精确点时能力的数据源。'
+    ? '任务会访问已配置的数据源并在后台运行，股票数量较多时可能需要较长时间。超出近期窗口的历史日期需要精确点时股票池。'
     : '任务会访问已配置的数据源，耗时取决于代码数量和网络状况。';
 }
 
@@ -456,6 +459,53 @@ function groupLabel(group) { return ({universe:'股票池',market:'行情估值'
 function issueText(item) { return item.issues?.map(i => i.message).join('；') || '未发现问题'; }
 function condition(label, pass, actual) { return `<div class="condition ${pass ? '' : 'fail'}"><i class="condition-icon">${pass ? '✓' : '!'}</i><span>${esc(label)}</span><small>${esc(actual)}</small></div>`; }
 function stageLine(key, label, status) { return `<div class="stage-line"><i>${key}</i><strong>${label}</strong>${badge(status)}</div>`; }
+
+const dimensionLabels = {
+  demand_durability: '需求持续性', competitive_position: '竞争地位',
+  dividend_sustainability: '分红可持续性', earnings_quality: '盈利质量',
+  market_mispricing: '市场错价', risk_reward_asymmetry: '风险收益不对称',
+  long_cycle_fit: '长周期适配度'
+};
+const scenarioLabels = { PESSIMISTIC:'悲观', BASE:'基准', OPTIMISTIC:'乐观' };
+const riskLabels = { LOW:'低', MEDIUM:'中', HIGH:'高', UNKNOWN:'未知' };
+function researchList(title, items, tone='') {
+  if (!Array.isArray(items) || !items.length) return '';
+  return `<div class="research-list ${tone}"><h5>${esc(title)}</h5><ul>${items.map(item => `<li>${esc(item)}</li>`).join('')}</ul></div>`;
+}
+function tier2Research(stageB) {
+  const a = stageB?.assessment;
+  if (!a) return '';
+  const dimensions = (a.dimensions || []).map(item => {
+    const confidence = item.confidence == null ? '—' : `${Math.round(item.confidence * 100)}%`;
+    const sourceText = (item.sources || []).map(source => [source.title, source.date, source.page_or_section].filter(Boolean).join(' · '));
+    return `<details class="research-dimension">
+      <summary><span>${esc(dimensionLabels[item.dimension] || item.dimension)}</span>${badge(item.verdict)}<small>置信度 ${esc(confidence)}</small></summary>
+      <div class="research-dimension-body">
+        <p class="dimension-summary">${esc(item.reasoning_summary || '暂无总结')}</p>
+        ${researchList('事实', item.facts)}
+        ${researchList('推断', item.inferences)}
+        ${researchList('反方证据', item.counter_evidence, 'counter')}
+        ${researchList('证伪条件', item.falsification_conditions, 'falsification')}
+        ${researchList('证据来源', sourceText, 'sources')}
+      </div>
+    </details>`;
+  }).join('');
+  const scenarios = (a.scenario_analysis || []).map(item => `<article class="scenario-card ${esc(item.scenario)}">
+    <div><span>${esc(scenarioLabels[item.scenario] || item.scenario)}</span><small>永久损失风险 ${esc(riskLabels[item.permanent_loss_risk] || item.permanent_loss_risk)}</small></div>
+    <strong>${item.value_per_share == null ? '—' : `${number(item.value_per_share)} 元`}</strong>
+    <p>3年年化 ${percent(item.annualized_return_3y)} · 5年年化 ${percent(item.annualized_return_5y)}</p>
+    <ul>${(item.assumptions || []).map(value => `<li>${esc(value)}</li>`).join('')}</ul>
+  </article>`).join('');
+  const provider = [stageB.ai_provider || a.ai_provider, stageB.ai_model || a.ai_model].filter(Boolean).join(' · ');
+  return `<section class="detail-section tier2-research">
+    <div class="research-heading"><div><span class="overline">AI EVIDENCE RESEARCH</span><h3>AI 证据研究</h3></div><div class="research-status">${badge(stageB.system_recommendation || a.recommendation)}<small>系统建议</small></div></div>
+    <div class="research-meta"><span>评估 ${esc(stageB.assessment_id || '—')}</span><span>${esc(provider || 'AI研究')}</span><span>导入 ${esc(formatTime(stageB.imported_at))}</span></div>
+    <div class="research-conclusion"><h4>结论摘要</h4><p>${esc(a.overall_reasoning || '暂无总体结论')}</p></div>
+    <h4 class="research-subtitle">情景估值</h4><div class="scenario-grid">${scenarios}</div>
+    <h4 class="research-subtitle">七维证据判断</h4><div class="research-dimensions">${dimensions}</div>
+    <div class="research-overall-evidence">${researchList('总体反方证据', a.overall_counter_evidence, 'counter')}${researchList('总体证伪条件', a.falsification_conditions, 'falsification')}</div>
+  </section>`;
+}
 
 function sparkline(values) {
   if (!values?.length) return '<span class="metric">—</span>';
