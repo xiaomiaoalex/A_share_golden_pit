@@ -94,6 +94,7 @@ def one_calendar_year_before(value: date) -> date:
 @dataclass(frozen=True)
 class AdjustedDividendEvent:
     ex_date: date
+    report_period: Optional[date]
     raw_per_share: float
     adjusted_per_share: float
     adjustment_factor: float
@@ -106,6 +107,70 @@ class DividendCalculation:
     adjusted_per_share: Optional[float]
     dividend_yield_ttm: Optional[float]
     events: tuple[AdjustedDividendEvent, ...]
+
+
+@dataclass(frozen=True)
+class FiscalYearDividendCalculation:
+    fiscal_year: Optional[int]
+    raw_per_share: Optional[float]
+    adjusted_per_share: Optional[float]
+    dividend_yield: Optional[float]
+    events: tuple[AdjustedDividendEvent, ...]
+    overlapping_annual_report_periods: tuple[date, ...] = ()
+    missing_report_period: bool = False
+
+
+def _adjust_dividend_events(
+    *,
+    events: Iterable[DividendEvent],
+    actions: Iterable[CorporateAction],
+    as_of_date: date,
+) -> list[AdjustedDividendEvent]:
+    valid_actions = [
+        action
+        for action in actions
+        if action.effective_date <= as_of_date
+        and valid_number(action.share_factor, positive=True) is not None
+    ]
+    adjusted_events: list[AdjustedDividendEvent] = []
+    seen: set[tuple] = set()
+    for event in events:
+        cash = valid_number(event.raw_cash_per_share_pre_tax)
+        if cash is None or cash < 0:
+            continue
+        if event.announcement_date is not None and event.announcement_date > as_of_date:
+            continue
+        normalized_status = str(event.status).strip().upper()
+        if not any(
+            marker in normalized_status
+            for marker in ("实施", "IMPLEMENTED", "COMPLETED")
+        ):
+            continue
+        if event.ex_date > as_of_date:
+            continue
+        # A provider can expose the same implemented plan more than once after
+        # revisions.  The business grain is report period + ex-date + cash/share.
+        key = (event.report_period, event.ex_date, round(cash, 12))
+        if key in seen:
+            continue
+        seen.add(key)
+        factor = 1.0
+        if not event.provider_adjusted:
+            for action in valid_actions:
+                if event.ex_date <= action.effective_date <= as_of_date:
+                    if not action.provider_adjusted:
+                        factor *= action.share_factor
+        adjusted_events.append(
+            AdjustedDividendEvent(
+                ex_date=event.ex_date,
+                report_period=event.report_period,
+                raw_per_share=cash,
+                adjusted_per_share=(cash if event.provider_adjusted else cash / factor),
+                adjustment_factor=factor,
+                provider_adjusted=event.provider_adjusted,
+            )
+        )
+    return adjusted_events
 
 
 def calculate_dividend_ttm(
@@ -124,44 +189,13 @@ def calculate_dividend_ttm(
 
     price = valid_number(close_price, positive=True)
     window_start = one_calendar_year_before(as_of_date)
-    valid_actions = [
-        action
-        for action in actions
-        if action.effective_date <= as_of_date
-        and valid_number(action.share_factor, positive=True) is not None
-    ]
-    adjusted_events: list[AdjustedDividendEvent] = []
-
-    for event in events:
-        cash = valid_number(event.raw_cash_per_share_pre_tax)
-        if cash is None or cash < 0:
-            continue
-        if event.announcement_date is not None and event.announcement_date > as_of_date:
-            continue
-        normalized_status = str(event.status).strip().upper()
-        if not any(
-            marker in normalized_status
-            for marker in ("实施", "IMPLEMENTED", "COMPLETED")
-        ):
-            continue
-        if not (window_start < event.ex_date <= as_of_date):
-            continue
-        factor = 1.0
-        if not event.provider_adjusted:
-            for action in valid_actions:
-                if event.ex_date <= action.effective_date <= as_of_date:
-                    if not action.provider_adjusted:
-                        factor *= action.share_factor
-        adjusted = cash if event.provider_adjusted else cash / factor
-        adjusted_events.append(
-            AdjustedDividendEvent(
-                ex_date=event.ex_date,
-                raw_per_share=cash,
-                adjusted_per_share=adjusted,
-                adjustment_factor=factor,
-                provider_adjusted=event.provider_adjusted,
-            )
+    adjusted_events = [
+        event
+        for event in _adjust_dividend_events(
+            events=events, actions=actions, as_of_date=as_of_date
         )
+        if window_start < event.ex_date <= as_of_date
+    ]
 
     raw_total = sum(item.raw_per_share for item in adjusted_events)
     adjusted_total = sum(item.adjusted_per_share for item in adjusted_events)
@@ -174,4 +208,91 @@ def calculate_dividend_ttm(
         adjusted_per_share=adjusted_total if adjusted_events else 0.0,
         dividend_yield_ttm=dividend_yield,
         events=tuple(adjusted_events),
+    )
+
+
+def calculate_latest_fiscal_year_dividend(
+    *,
+    events: Iterable[DividendEvent],
+    actions: Iterable[CorporateAction],
+    as_of_date: date,
+    close_price: object,
+) -> FiscalYearDividendCalculation:
+    """Return the latest implemented complete fiscal-year cash dividend yield.
+
+    A complete fiscal year is evidenced by an implemented event whose
+    ``report_period`` is December 31.  Interim, special and annual events sharing
+    that fiscal year are deduplicated and summed.  Missing report periods never
+    produce a passing value.
+    """
+
+    source_events = list(events)
+    adjusted = _adjust_dividend_events(
+        events=source_events, actions=actions, as_of_date=as_of_date
+    )
+    if not source_events:
+        price = valid_number(close_price, positive=True)
+        return FiscalYearDividendCalculation(
+            fiscal_year=None,
+            raw_per_share=0.0,
+            adjusted_per_share=0.0,
+            dividend_yield=(0.0 if price is not None else None),
+            events=(),
+            missing_report_period=False,
+        )
+    missing_report_period = any(
+        event.report_period is None
+        for event in source_events
+        if event.ex_date <= as_of_date
+        and any(
+            marker in str(event.status).strip().upper()
+            for marker in ("实施", "IMPLEMENTED", "COMPLETED")
+        )
+    )
+    annual_periods = sorted(
+        {
+            event.report_period
+            for event in adjusted
+            if event.report_period is not None
+            and (event.report_period.month, event.report_period.day) == (12, 31)
+        }
+    )
+    overlap_start = one_calendar_year_before(as_of_date)
+    overlapping = tuple(
+        period
+        for period in annual_periods
+        if any(
+            event.report_period == period and overlap_start < event.ex_date <= as_of_date
+            for event in adjusted
+        )
+    )
+    if missing_report_period or not annual_periods:
+        return FiscalYearDividendCalculation(
+            fiscal_year=None,
+            raw_per_share=None,
+            adjusted_per_share=None,
+            dividend_yield=None,
+            events=(),
+            overlapping_annual_report_periods=(
+                overlapping if len(overlapping) > 1 else ()
+            ),
+            missing_report_period=missing_report_period,
+        )
+    fiscal_year = annual_periods[-1].year
+    selected = tuple(
+        event
+        for event in adjusted
+        if event.report_period is not None and event.report_period.year == fiscal_year
+    )
+    raw_total = sum(event.raw_per_share for event in selected)
+    adjusted_total = sum(event.adjusted_per_share for event in selected)
+    price = valid_number(close_price, positive=True)
+    return FiscalYearDividendCalculation(
+        fiscal_year=fiscal_year,
+        raw_per_share=raw_total,
+        adjusted_per_share=adjusted_total,
+        dividend_yield=(adjusted_total / price if price is not None else None),
+        events=selected,
+        overlapping_annual_report_periods=(overlapping if len(overlapping) > 1 else ()),
+        missing_report_period=False,
     )

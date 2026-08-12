@@ -334,7 +334,10 @@ class Tier2EvidenceExporter:
             "",
             f"- 状态：{decision.get('screen_status')}",
             f"- PE(TTM)：{decision.get('selected_pe_ttm')}",
-            f"- 股息率(TTM)：{decision.get('dividend_yield_ttm')}",
+            f"- 最新完整会计年度：{decision.get('latest_fiscal_year')}",
+            "- 最新完整会计年度税前股息率："
+            f"{decision.get('latest_fiscal_year_dividend_yield')}",
+            f"- 旧口径股息率(TTM，仅供历史审计)：{decision.get('dividend_yield_ttm')}",
             f"- 收入同比序列：{decision.get('revenue_yoy_sequence')}",
             f"- 归母净利润同比序列：{decision.get('parent_np_yoy_sequence')}",
             "",

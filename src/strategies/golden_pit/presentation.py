@@ -110,12 +110,19 @@ class GoldenPitReadModel:
             if "screening_runs" not in tables:
                 return self._empty_overview()
 
+            superseded_select = (
+                "CASE WHEN EXISTS(SELECT 1 FROM tier1_decision_supersessions s "
+                "WHERE s.old_run_id=screening_runs.run_id) THEN 1 ELSE 0 END"
+                if "tier1_decision_supersessions" in tables
+                else "0"
+            )
             runs = [
                 dict(row)
                 for row in connection.execute(
-                    """
+                    f"""
                     SELECT run_id, as_of_date, status, started_at, finished_at,
-                           universe_size, calculation_version
+                           universe_size, calculation_version,
+                           {superseded_select} AS superseded
                     FROM screening_runs
                     WHERE strategy_id='golden-pit'
                     ORDER BY started_at DESC, rowid DESC LIMIT 30
@@ -647,16 +654,24 @@ class GoldenPitReadModel:
         tier3 = self._latest_tier3(connection, run_id, tables)
         rows = connection.execute(
             """
-            SELECT symbol, stock_name, screen_status, business_status, data_status,
-                   selected_pe_ttm AS pe_ttm,
-                   dividend_yield_ttm AS dividend_yield
-            FROM tier1_decisions WHERE run_id=?
+            SELECT d.symbol, d.stock_name, d.screen_status, d.business_status, d.data_status,
+                   d.selected_pe_ttm AS pe_ttm,
+                   COALESCE(d.latest_fiscal_year_dividend_yield,
+                            d.dividend_yield_ttm) AS dividend_yield,
+                   CASE WHEN s.old_decision_id IS NULL THEN 1 ELSE 0 END AS is_valid,
+                   s.new_run_id AS superseded_by_run_id
+            FROM tier1_decisions d
+            LEFT JOIN tier1_decision_supersessions s
+              ON s.old_decision_id=d.decision_id
+            WHERE d.run_id=?
             """,
             (run_id,),
         ).fetchall()
         index: list[dict[str, Any]] = []
         for raw in rows:
             item = dict(raw)
+            if not item["is_valid"]:
+                item["screen_status"] = "SUPERSEDED"
             symbol = str(item["symbol"])
             item["stage_b_status"] = self._stage_b_status(
                 item, tier2.get(symbol, {})
@@ -801,15 +816,19 @@ class GoldenPitReadModel:
         symbol_clause = ""
         parameters: list[Any] = [run_id]
         if symbols is not None:
-            symbol_clause = f" AND symbol IN ({','.join('?' for _ in symbols)})"
+            symbol_clause = f" AND d.symbol IN ({','.join('?' for _ in symbols)})"
             parameters.extend(symbols)
         rows = connection.execute(
             f"""
-            SELECT * FROM tier1_decisions
-            WHERE run_id=?{symbol_clause} ORDER BY
-                CASE screen_status WHEN 'PASS' THEN 0 WHEN 'REVIEW' THEN 1
+            SELECT d.*, CASE WHEN s.old_decision_id IS NULL THEN 1 ELSE 0 END AS is_valid,
+                   s.new_run_id AS superseded_by_run_id
+            FROM tier1_decisions d
+            LEFT JOIN tier1_decision_supersessions s
+              ON s.old_decision_id=d.decision_id
+            WHERE d.run_id=?{symbol_clause} ORDER BY
+                CASE d.screen_status WHEN 'PASS' THEN 0 WHEN 'REVIEW' THEN 1
                      WHEN 'PENDING_DATA' THEN 2 ELSE 3 END,
-                symbol
+                d.symbol
             """,
             parameters,
         ).fetchall()
@@ -822,19 +841,30 @@ class GoldenPitReadModel:
         results: list[dict[str, Any]] = []
         for raw in rows:
             row = dict(raw)
+            effective_screen_status = (
+                row["screen_status"] if row["is_valid"] else "SUPERSEDED"
+            )
             symbol = str(row["symbol"])
             t2 = tier2.get(symbol, {})
             t3 = tier3.get(symbol, {})
             candidate = {
                 "symbol": symbol,
                 "stock_name": row["stock_name"],
-                "screen_status": row["screen_status"],
+                "screen_status": effective_screen_status,
+                "historical_screen_status": row["screen_status"],
+                "is_valid": bool(row["is_valid"]),
+                "superseded_by_run_id": row.get("superseded_by_run_id"),
                 "business_status": row["business_status"],
                 "data_status": row["data_status"],
                 "pe_ttm": row["selected_pe_ttm"],
                 "supplier_pe_ttm": row["supplier_pe_ttm"],
                 "self_pe_ttm": row["self_pe_ttm"],
-                "dividend_yield": row["dividend_yield_ttm"],
+                "dividend_yield": (
+                    row.get("latest_fiscal_year_dividend_yield")
+                    if row.get("latest_fiscal_year_dividend_yield") is not None
+                    else row["dividend_yield_ttm"]
+                ),
+                "latest_fiscal_year": row.get("latest_fiscal_year"),
                 "risk_warning": bool(row["risk_warning"]),
                 "quarters": _json(row["trend_quarters_json"], []),
                 "revenue_yoy": _json(row["revenue_yoy_sequence_json"], []),
@@ -947,6 +977,8 @@ class GoldenPitReadModel:
 
     @staticmethod
     def _stage_b_status(tier1: dict[str, Any], tier2: dict[str, Any]) -> str:
+        if tier1.get("is_valid") in {0, False} or tier1.get("screen_status") == "SUPERSEDED":
+            return "已失效"
         if tier1["screen_status"] != "PASS":
             return "未进入"
         if not tier2:
@@ -961,6 +993,8 @@ class GoldenPitReadModel:
     def _stage_c_status(
         tier1: dict[str, Any], tier2: dict[str, Any], tier3: dict[str, Any]
     ) -> str:
+        if tier1.get("is_valid") in {0, False} or tier1.get("screen_status") == "SUPERSEDED":
+            return "已失效"
         if tier1["screen_status"] != "PASS" or tier2.get("human_decision") != "PASS":
             return "未进入"
         if not tier3:

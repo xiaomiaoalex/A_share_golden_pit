@@ -61,10 +61,21 @@ class Tier2Repository:
     ) -> list[dict[str, Any]]:
         self.migrate()
         params: list[Any] = [run_id]
+        with self.connect() as connection:
+            has_supersessions = self.tier1._table_exists(
+                connection, "tier1_decision_supersessions"
+            )
         sql = """
             SELECT * FROM tier1_decisions
             WHERE run_id=? AND screen_status='PASS'
         """
+        if has_supersessions:
+            sql += """
+              AND NOT EXISTS (
+                  SELECT 1 FROM tier1_decision_supersessions s
+                  WHERE s.old_decision_id=tier1_decisions.decision_id
+              )
+            """
         normalized = sorted(set(symbols or []))
         if normalized:
             sql += f" AND symbol IN ({','.join('?' for _ in normalized)})"

@@ -193,11 +193,90 @@ class FallbackPointInTimeProvider:
         )
 
     def get_dividend_bundle(self, symbol: str, as_of_date: date):
-        return self._call(
+        result = self._call(
             "get_dividend_bundle",
             symbol,
             as_of_date,
             field_group="dividend_and_actions",
+        )
+        if not (
+            result.usable
+            and result.data.events
+            and any(event.report_period is None for event in result.data.events)
+        ):
+            return result
+
+        # A cash/ex-date source without attribution period is insufficient for
+        # the latest-complete-fiscal-year rule.  Enrich from another configured
+        # provider; never infer a report year from the implementation date.
+        attempts = list((result.raw_payload or {}).get("fallback_trace", []))
+        supplement = None
+        for provider in self.providers:
+            if getattr(provider, "provider_name", "") == result.provider:
+                continue
+            candidate = provider.get_dividend_bundle(symbol, as_of_date)
+            attempts.append(self._trace(candidate))
+            if candidate.usable and candidate.data is not None:
+                periods = {
+                    (event.ex_date, round(float(event.raw_cash_per_share_pre_tax), 10)):
+                    event.report_period
+                    for event in candidate.data.events
+                    if event.report_period is not None
+                }
+                if periods:
+                    supplement = candidate
+                    break
+        if supplement is None:
+            return replace(
+                result,
+                quality_warnings=[
+                    *result.quality_warnings,
+                    "分红报告期无法由AKShare/Tushare补全；硬筛选保持PARTIAL",
+                ],
+                raw_payload={
+                    "selected_payload": (result.raw_payload or {}).get(
+                        "selected_payload", result.raw_payload
+                    ),
+                    "fallback_trace": attempts,
+                    "report_period_enrichment": "UNAVAILABLE",
+                },
+            )
+
+        periods = {
+            (event.ex_date, round(float(event.raw_cash_per_share_pre_tax), 10)):
+            event.report_period
+            for event in supplement.data.events
+            if event.report_period is not None
+        }
+        enriched_events = tuple(
+            replace(
+                event,
+                report_period=periods.get(
+                    (event.ex_date, round(float(event.raw_cash_per_share_pre_tax), 10))
+                ),
+                raw={
+                    **event.raw,
+                    "report_period_enriched_by": supplement.provider,
+                },
+            )
+            if event.report_period is None
+            else event
+            for event in result.data.events
+        )
+        return replace(
+            result,
+            data=type(result.data)(enriched_events, result.data.actions),
+            quality_warnings=[
+                *result.quality_warnings,
+                f"分红报告期由{supplement.provider}交叉补全",
+            ],
+            raw_payload={
+                "selected_payload": (result.raw_payload or {}).get(
+                    "selected_payload", result.raw_payload
+                ),
+                "fallback_trace": attempts,
+                "report_period_enrichment": supplement.provider,
+            },
         )
 
     def get_risk_warning_status(self, symbol: str, stock_name: str, as_of_date: date):

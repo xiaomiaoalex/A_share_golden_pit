@@ -111,7 +111,7 @@ SOURCE_CAPABILITIES: dict[str, dict[str, CapabilityLevel]] = {
         "universe": CapabilityLevel.LIMITED,
         "market": CapabilityLevel.EXACT,
         "financial_statements": CapabilityLevel.EXACT,
-        "dividend_and_actions": CapabilityLevel.LIMITED,
+        "dividend_and_actions": CapabilityLevel.EXACT,
         "risk_warning_status": CapabilityLevel.LIMITED,
     },
     "Tushare Pro": {
@@ -125,7 +125,10 @@ SOURCE_CAPABILITIES: dict[str, dict[str, CapabilityLevel]] = {
         "universe": CapabilityLevel.LIMITED,
         "market": CapabilityLevel.LIMITED,
         "financial_statements": CapabilityLevel.UNSUPPORTED,
-        "dividend_and_actions": CapabilityLevel.EXACT,
+        # The endpoint has implemented cash/share and ex-date, but no profit
+        # attribution report period.  It cannot independently satisfy the
+        # latest-complete-fiscal-year screening contract.
+        "dividend_and_actions": CapabilityLevel.LIMITED,
         "risk_warning_status": CapabilityLevel.EXACT,
     },
 }

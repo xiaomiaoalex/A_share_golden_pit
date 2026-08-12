@@ -4,10 +4,74 @@ import pytest
 
 from src.screening.tier1_v2.contracts import CorporateAction, DividendEvent
 from src.screening.tier1_v2.metrics import (
+    calculate_latest_fiscal_year_dividend,
     calculate_dividend_ttm,
     compute_self_pe_ttm,
     select_pe_ttm,
 )
+
+
+def _dividend(ex_date, report_period, cash, *, source="synthetic"):
+    return DividendEvent(
+        symbol="000001",
+        ex_date=ex_date,
+        report_period=report_period,
+        raw_cash_per_share_pre_tax=cash,
+        status="实施分配",
+        source=source,
+    )
+
+
+def test_latest_complete_fiscal_year_excludes_prior_annual_dividend():
+    result = calculate_latest_fiscal_year_dividend(
+        events=[
+            _dividend(date(2025, 8, 20), date(2024, 12, 31), 0.71914),
+            _dividend(date(2026, 7, 14), date(2025, 12, 31), 0.55581),
+        ],
+        actions=[],
+        as_of_date=date(2026, 8, 10),
+        close_price=16.37,
+    )
+
+    assert result.fiscal_year == 2025
+    assert result.adjusted_per_share == pytest.approx(0.55581)
+    assert result.dividend_yield == pytest.approx(0.55581 / 16.37)
+    assert result.overlapping_annual_report_periods == (
+        date(2024, 12, 31),
+        date(2025, 12, 31),
+    )
+
+
+def test_latest_fiscal_year_sums_interim_special_and_annual_and_deduplicates():
+    events = [
+        _dividend(date(2025, 10, 1), date(2025, 6, 30), 0.2),
+        _dividend(date(2026, 1, 5), date(2025, 9, 30), 0.1),
+        _dividend(date(2026, 6, 1), date(2025, 12, 31), 0.4),
+        _dividend(date(2026, 6, 1), date(2025, 12, 31), 0.4, source="duplicate"),
+    ]
+    result = calculate_latest_fiscal_year_dividend(
+        events=events,
+        actions=[],
+        as_of_date=date(2026, 8, 10),
+        close_price=10,
+    )
+
+    assert result.fiscal_year == 2025
+    assert result.adjusted_per_share == pytest.approx(0.7)
+    assert result.dividend_yield == pytest.approx(0.07)
+    assert len(result.events) == 3
+
+
+def test_missing_report_period_cannot_produce_fiscal_year_yield():
+    result = calculate_latest_fiscal_year_dividend(
+        events=[_dividend(date(2026, 6, 1), None, 0.8)],
+        actions=[],
+        as_of_date=date(2026, 8, 10),
+        close_price=10,
+    )
+
+    assert result.missing_report_period is True
+    assert result.dividend_yield is None
 
 
 def test_self_pe_requires_positive_profit_and_market_cap():

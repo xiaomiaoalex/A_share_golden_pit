@@ -114,7 +114,7 @@
 
         <article class="panel candidates-panel">
           <div class="panel-header table-heading"><div><span class="panel-kicker">CANDIDATE RADAR</span><h2>候选雷达</h2></div><button class="text-button" data-goto="candidates">查看全部 <span>→</span></button></div>
-          <div class="table-wrap"><table><thead><tr><th>公司 / 代码</th><th>量化初筛</th><th>PE (TTM)</th><th>股息率</th><th>营收趋势</th><th>证据研究</th><th></th></tr></thead><tbody id="overviewCandidates"></tbody></table></div>
+          <div class="table-wrap"><table><thead><tr><th>公司 / 代码</th><th>量化初筛</th><th>PE (TTM)</th><th>最新年度股息率</th><th>营收趋势</th><th>证据研究</th><th></th></tr></thead><tbody id="overviewCandidates"></tbody></table></div>
           <div class="empty-state hidden" id="overviewEmpty"><div class="empty-icon"><svg viewBox="0 0 24 24"><path d="M4 19V9M10 19V5M16 19v-7M22 19H2"/></svg></div><h3>本批次暂无候选记录</h3><p>启动新筛选后，结果会在这里按状态展示。</p></div>
         </article>
       </section>
@@ -127,12 +127,12 @@
             <label><span>量化初筛</span><select data-filter-key="stageA"><option value="ALL">全部状态</option><option value="PASS">通过</option><option value="FAIL">未通过</option><option value="DATA_ERROR">数据异常</option><option value="PENDING_DATA">数据待补</option><option value="TURNAROUND_WATCHLIST">反转观察</option><option value="NOT_COMPARABLE">不可比</option></select></label>
             <label><span>数据状态</span><select data-filter-key="data"><option value="ALL">全部状态</option><option value="COMPLETE">数据完整</option><option value="PARTIAL">部分数据</option><option value="ERROR">数据异常</option></select></label>
             <label><span>PE (TTM)</span><select data-filter-key="pe"><option value="ALL">全部区间</option><option value="LT15">低于 15×</option><option value="15TO30">15×–30×</option><option value="GTE30">30×及以上</option><option value="MISSING">数据缺失</option></select></label>
-            <label><span>股息率</span><select data-filter-key="dividend"><option value="ALL">全部区间</option><option value="GT5">高于 5%</option><option value="2TO5">2%–5%</option><option value="LT2">低于 2%</option><option value="MISSING">数据缺失</option></select></label>
+            <label><span>最新年度股息率</span><select data-filter-key="dividend"><option value="ALL">全部区间</option><option value="GT5">高于 5%</option><option value="2TO5">2%–5%</option><option value="LT2">低于 2%</option><option value="MISSING">数据缺失</option></select></label>
             <label><span>证据研究</span><select data-filter-key="stageB" id="stageBFilter"><option value="ALL">全部状态</option></select></label>
             <label><span>风险终审</span><select data-filter-key="stageC" id="stageCFilter"><option value="ALL">全部状态</option></select></label>
           </div>
         </div>
-        <article class="panel candidates-panel full"><div class="table-wrap"><table><thead><tr><th>公司 / 代码</th><th>量化初筛</th><th>数据状态</th><th><button class="sort-header" data-sort="pe_ttm">PE (TTM)<span class="sort-icon">↕</span></button></th><th><button class="sort-header" data-sort="dividend_yield">股息率<span class="sort-icon">↕</span></button></th><th>证据研究</th><th>风险终审</th><th></th></tr></thead><tbody id="allCandidates"></tbody></table></div><div class="empty-state hidden" id="candidateEmpty"><h3>没有符合当前条件的记录</h3><p>尝试调整列筛选条件，或一键重置全部筛选。</p></div><div class="candidate-pagination"><button id="candidatePrev">上一页</button><span id="candidatePageInfo">第 1 / 1 页</span><button id="candidateNext">下一页</button></div></article>
+        <article class="panel candidates-panel full"><div class="table-wrap"><table><thead><tr><th>公司 / 代码</th><th>量化初筛</th><th>数据状态</th><th><button class="sort-header" data-sort="pe_ttm">PE (TTM)<span class="sort-icon">↕</span></button></th><th><button class="sort-header" data-sort="dividend_yield">最新年度股息率<span class="sort-icon">↕</span></button></th><th>证据研究</th><th>风险终审</th><th></th></tr></thead><tbody id="allCandidates"></tbody></table></div><div class="empty-state hidden" id="candidateEmpty"><h3>没有符合当前条件的记录</h3><p>尝试调整列筛选条件，或一键重置全部筛选。</p></div><div class="candidate-pagination"><button id="candidatePrev">上一页</button><span id="candidatePageInfo">第 1 / 1 页</span><button id="candidateNext">下一页</button></div></article>
       </section>
 
       <section class="page strategy-page" data-strategy-page="golden-pit" id="page-quality">

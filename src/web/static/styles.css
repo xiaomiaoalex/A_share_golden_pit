@@ -193,7 +193,7 @@ tbody tr:hover { background: #fbfcfb; }
 .badge.FAIL, .badge.REJECT, .badge.ERROR { color: var(--red); background: var(--red-light); }
 .badge.INTERRUPTED { color: #a54d43; background: #f7e6e3; }
 .badge.REVIEW, .badge.PENDING_DATA, .badge.pending { color: #9b6a20; background: #f8efd9; }
-.badge.neutral { color: #73807c; background: #eef1f0; }
+.badge.SUPERSEDED, .badge.neutral { color: #73807c; background: #eef1f0; }
 .metric { color: var(--ink); font-family: ui-monospace, monospace; font-weight: 650; }
 .positive { color: var(--green-700); }
 .negative { color: var(--red); }

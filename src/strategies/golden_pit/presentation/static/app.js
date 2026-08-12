@@ -16,12 +16,12 @@ const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 const fmt = new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 2 });
 const statusLabels = {
-  PASS: '通过', FAIL: '未通过', REVIEW: '待复核', REJECT: '否决',
+  PASS: '通过', FAIL: '未通过', SUPERSEDED: '已失效', REVIEW: '待复核', REJECT: '否决',
   COMPLETE: '数据完整', PARTIAL: '部分数据', ERROR: '数据异常', PENDING_DATA: '数据待补', DATA_ERROR: '数据异常',
   FINISHED: '已完成', FINISHED_WITH_ERRORS: '完成但有异常', RUNNING: '运行中',
   INTERRUPTED: '已中断', QUEUED: '排队中',
   SUCCEEDED: '已完成', FAILED: '失败', '未进入': '未进入',
-  '待生成证据包': '待生成证据包', '待AI研究': '待 AI 研究', '待人工复核': '待人工复核', '待风险研究': '待风险研究'
+  '待生成证据包': '待生成证据包', '待AI研究': '待 AI 研究', '待人工复核': '待人工复核', '待风险研究': '待风险研究', '已失效': '已失效'
 };
 
 function mount() {
@@ -291,9 +291,9 @@ function openDrawer(symbol) {
   const revenueRule = legacyStrict ? '营收同比严格逐季改善' : '营收同比连续两个季度正增长';
   const profitRule = legacyStrict ? '归母净利润同比严格逐季改善' : '归母净利润同比连续两个季度正增长';
   $('#drawerBody').innerHTML = `
-    <section class="detail-section"><h3>核心指标</h3><div class="detail-kpis"><div class="detail-kpi"><span>PE (TTM)</span><strong>${number(c.pe_ttm, '×')}</strong></div><div class="detail-kpi"><span>股息率 TTM</span><strong>${percent(c.dividend_yield)}</strong></div><div class="detail-kpi"><span>风险警示</span><strong>${c.risk_warning ? '是' : '否'}</strong></div></div></section>
+    <section class="detail-section"><h3>核心指标</h3><div class="detail-kpis"><div class="detail-kpi"><span>PE (TTM)</span><strong>${number(c.pe_ttm, '×')}</strong></div><div class="detail-kpi"><span>${c.latest_fiscal_year ? `${esc(c.latest_fiscal_year)}年度股息率` : '最新完整年度股息率'}</span><strong>${percent(c.dividend_yield)}</strong></div><div class="detail-kpi"><span>风险警示</span><strong>${c.risk_warning ? '是' : '否'}</strong></div></div></section>
     <section class="detail-section"><h3>连续单季度同比趋势</h3>${trendChart(c)}<div class="chart-legend"><span><i></i>营业收入</span><span class="profit"><i></i>归母净利润</span></div></section>
-    <section class="detail-section"><h3>量化初筛条件</h3><div class="condition-list">${condition('PE (TTM) < 15', pePass, number(c.pe_ttm, '×'))}${condition('税前股息率 (TTM) > 5%', divPass, percent(c.dividend_yield))}${condition(revenueRule, revPass, sequence(c.revenue_yoy))}${condition(profitRule, profitPass, sequence(c.profit_yoy))}${condition('非 ST / 风险警示', !c.risk_warning, c.risk_warning ? '风险警示' : '正常')}</div></section>
+    <section class="detail-section"><h3>量化初筛条件</h3><div class="condition-list">${condition('PE (TTM) < 15', pePass, number(c.pe_ttm, '×'))}${condition('最新完整会计年度税前股息率 > 5%', divPass, percent(c.dividend_yield))}${condition(revenueRule, revPass, sequence(c.revenue_yoy))}${condition(profitRule, profitPass, sequence(c.profit_yoy))}${condition('非 ST / 风险警示', !c.risk_warning, c.risk_warning ? '风险警示' : '正常')}</div></section>
     ${tier2Research(c.stage_b)}
     ${c.quality_warnings.length ? `<section class="detail-section"><h3>数据提示</h3><ul class="warning-list">${c.quality_warnings.map(item => `<li>${esc(item)}</li>`).join('')}</ul></section>` : ''}
     <section class="detail-section"><h3>研究阶段</h3><div class="stage-timeline">${stageLine('A', '量化初筛', c.screen_status)}${stageLine('B', '证据研究', c.stage_b_status)}${stageLine('C', '风险终审', c.stage_c_status)}</div></section>`;
@@ -420,7 +420,7 @@ function navigate(page) {
 }
 
 function companyCell(c) { return `<div class="company"><span class="company-mark">${esc(c.stock_name.slice(0,1))}</span><div><strong>${esc(c.stock_name)}</strong><span>${esc(c.symbol)}</span></div></div>`; }
-function badge(status) { const raw = String(status ?? '—'); const cls = ['PASS','FAIL','REJECT','ERROR','COMPLETE','FINISHED','FINISHED_WITH_ERRORS','REVIEW','PENDING_DATA','DATA_ERROR','QUEUED','RUNNING','SUCCEEDED','FAILED','INTERRUPTED'].includes(raw) ? raw : (raw.startsWith('待') ? 'pending' : 'neutral'); return `<span class="badge ${cls}">${esc(statusLabels[raw] || raw)}</span>`; }
+function badge(status) { const raw = String(status ?? '—'); const cls = ['PASS','FAIL','SUPERSEDED','REJECT','ERROR','COMPLETE','FINISHED','FINISHED_WITH_ERRORS','REVIEW','PENDING_DATA','DATA_ERROR','QUEUED','RUNNING','SUCCEEDED','FAILED','INTERRUPTED'].includes(raw) ? raw : (raw.startsWith('待') ? 'pending' : 'neutral'); return `<span class="badge ${cls}">${esc(statusLabels[raw] || raw)}</span>`; }
 function number(value, suffix='') { return value == null ? '—' : `${fmt.format(value)}${suffix}`; }
 function percent(value) { return value == null ? '—' : `${fmt.format(value * 100)}%`; }
 function sequence(values) { return values?.length ? values.map(v => `${fmt.format(v*100)}%`).join(' → ') : '—'; }

@@ -24,6 +24,8 @@ from .contracts import MarketSnapshot, Tier1Decision
 from .decision import DecisionInput, evaluate_tier1
 from .metrics import (
     DividendCalculation,
+    FiscalYearDividendCalculation,
+    calculate_latest_fiscal_year_dividend,
     calculate_dividend_ttm,
     compute_self_pe_ttm,
     select_pe_ttm,
@@ -326,6 +328,10 @@ class Tier1Pipeline:
                             dividend_yield_ttm=None,
                             dividend_ttm_raw_per_share=None,
                             dividend_ttm_adjusted_per_share=None,
+                            latest_fiscal_year=None,
+                            latest_fiscal_year_dividend_yield=None,
+                            latest_fiscal_year_dividend_raw_per_share=None,
+                            latest_fiscal_year_dividend_adjusted_per_share=None,
                             risk_warning=None,
                             quarterly_window=[],
                             error_fields=["pipeline"],
@@ -413,6 +419,7 @@ class Tier1Pipeline:
         quarterly_series = []
         trend_window = []
         dividend_calculation = DividendCalculation(None, None, None, ())
+        fiscal_dividend = FiscalYearDividendCalculation(None, None, None, None, ())
         risk_warning: Optional[bool] = None
 
         market_env = self.provider.get_market_snapshot(item.symbol, as_of_date)
@@ -573,6 +580,17 @@ class Tier1Pipeline:
                     as_of_date=as_of_date,
                     close_price=market.close_price if market else None,
                 )
+                fiscal_dividend = calculate_latest_fiscal_year_dividend(
+                    events=events,
+                    actions=actions,
+                    as_of_date=as_of_date,
+                    close_price=market.close_price if market else None,
+                )
+                if fiscal_dividend.missing_report_period:
+                    warnings.append(
+                        "[数据质量:MISSING_DIVIDEND_REPORT_PERIOD] "
+                        "报告期补全失败，最新完整会计年度股息率不可用"
+                    )
                 self.repository.save_dividends(
                     run_id, bundle, dividend_calculation, dividend_obs
                 )
@@ -589,10 +607,37 @@ class Tier1Pipeline:
                     calculated_value=dividend_calculation.dividend_yield_ttm,
                     calculation_note="税前已实施现金分红，按除权日TTM窗口并按送转行动调整到as_of股份口径",
                 )
+                self.repository.save_lineage(
+                    run_id,
+                    item.symbol,
+                    "latest_fiscal_year_dividend_yield",
+                    source_observation_id=dividend_obs,
+                    source_period=(
+                        f"{fiscal_dividend.fiscal_year}-12-31"
+                        if fiscal_dividend.fiscal_year is not None
+                        else None
+                    ),
+                    available_at=as_of_date,
+                    raw_value={
+                        "raw_cash_per_share": fiscal_dividend.raw_per_share,
+                        "close_price": market.close_price if market else None,
+                        "event_report_periods": [
+                            event.report_period.isoformat()
+                            if event.report_period
+                            else None
+                            for event in events
+                        ],
+                    },
+                    calculated_value=fiscal_dividend.dividend_yield,
+                    calculation_note=(
+                        "按利润归属报告期分组；选取含12-31年末方案的最新完整会计年度，"
+                        "合计同年度中期、特别及年末已实施税前现金分红并按公司行动调整"
+                    ),
+                )
 
         known_dividend_fail = (
-            dividend_calculation.dividend_yield_ttm is not None
-            and not dividend_calculation.dividend_yield_ttm
+            fiscal_dividend.dividend_yield is not None
+            and not fiscal_dividend.dividend_yield
             > self.config.min_dividend_yield_ttm
         )
         if not known_pe_fail and not known_dividend_fail:
@@ -666,6 +711,10 @@ class Tier1Pipeline:
                 dividend_yield_ttm=dividend_calculation.dividend_yield_ttm,
                 dividend_ttm_raw_per_share=dividend_calculation.raw_per_share,
                 dividend_ttm_adjusted_per_share=dividend_calculation.adjusted_per_share,
+                latest_fiscal_year=fiscal_dividend.fiscal_year,
+                latest_fiscal_year_dividend_yield=fiscal_dividend.dividend_yield,
+                latest_fiscal_year_dividend_raw_per_share=fiscal_dividend.raw_per_share,
+                latest_fiscal_year_dividend_adjusted_per_share=fiscal_dividend.adjusted_per_share,
                 risk_warning=risk_warning,
                 quarterly_window=trend_window,
                 error_fields=errors,

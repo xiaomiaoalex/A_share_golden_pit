@@ -22,6 +22,10 @@ def decision_input(**overrides):
         dividend_yield_ttm=0.06,
         dividend_ttm_raw_per_share=0.6,
         dividend_ttm_adjusted_per_share=0.6,
+        latest_fiscal_year=2025,
+        latest_fiscal_year_dividend_yield=0.06,
+        latest_fiscal_year_dividend_raw_per_share=0.6,
+        latest_fiscal_year_dividend_adjusted_per_share=0.6,
         risk_warning=False,
         quarterly_window=improving_window()[-2:],
     )
@@ -40,7 +44,11 @@ def test_all_strict_conditions_pass():
     "field,value,condition",
     [
         ("selected_pe_ttm", 15.0, "pe_ttm"),
-        ("dividend_yield_ttm", 0.05, "dividend_yield_ttm"),
+        (
+            "latest_fiscal_year_dividend_yield",
+            0.05,
+            "latest_fiscal_year_dividend_yield",
+        ),
         ("risk_warning", True, "risk_warning"),
     ],
 )
@@ -117,7 +125,7 @@ def test_known_fail_wins_while_data_status_remains_partial():
     result = evaluate_tier1(
         decision_input(
             selected_pe_ttm=15,
-            dividend_yield_ttm=None,
+            latest_fiscal_year_dividend_yield=None,
             risk_warning=None,
             quarterly_window=[],
             skipped_fields=["after_known_pe_fail"],
@@ -145,7 +153,9 @@ def test_invalid_pe_never_passes(bad):
 
 @pytest.mark.parametrize("bad", [None, float("nan"), float("inf"), ""])
 def test_invalid_dividend_never_passes(bad):
-    result = evaluate_tier1(decision_input(dividend_yield_ttm=bad))
+    result = evaluate_tier1(
+        decision_input(latest_fiscal_year_dividend_yield=bad)
+    )
     assert result.screen_status == "PENDING_DATA"
 
 

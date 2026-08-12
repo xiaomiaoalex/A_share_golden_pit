@@ -70,15 +70,12 @@ def test_valid_unknown_source_remains_operational_but_single_source():
     assert assessment.verification_status == VerificationStatus.SINGLE_SOURCE
 
 
-def test_limited_dividend_source_cannot_satisfy_hard_condition():
+def test_report_period_capable_akshare_dividend_source_is_exact():
     raw = envelope(DividendBundle((), ()), provider="AKShare")
 
     assessment = assess_envelope(
         "dividend_and_actions", raw, date(2026, 8, 10)
     )
 
-    assert assessment.blocking is True
-    assert any(
-        issue.code == "LIMITED_SOURCE_CAPABILITY" and issue.blocking
-        for issue in assessment.issues
-    )
+    assert assessment.blocking is False
+    assert assessment.verification_status == VerificationStatus.SINGLE_SOURCE

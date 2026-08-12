@@ -71,6 +71,7 @@ class SyntheticProvider:
                         raw_cash_per_share_pre_tax=0.6,
                         status="实施分配",
                         source="synthetic:dividend",
+                        report_period=date(2025, 12, 31),
                     ),
                 ),
                 actions=(),

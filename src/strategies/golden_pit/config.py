@@ -13,7 +13,7 @@ class Tier1Config:
     """Business rules confirmed for Stage A."""
 
     max_pe_ttm: float = 15.0
-    min_dividend_yield_ttm: float = 0.05
+    min_latest_fiscal_year_dividend_yield: float = 0.05
     trend_quarters: int = 2
     trend_rule: str = "POSITIVE_GROWTH"
     # Retained for exact continuation of pre-v2.2 run snapshots.
@@ -21,9 +21,15 @@ class Tier1Config:
     revenue_metric: str = "OPERATE_INCOME"
     profit_metric: str = "PARENT_NETPROFIT"
     dividend_tax_basis: str = "PRE_TAX"
+    dividend_period_basis: str = "LATEST_COMPLETE_FISCAL_YEAR"
     current_supplier_window_days: int = 7
     pe_mismatch_warning_ratio: float = 0.05
-    calculation_version: str = "tier1-v2.2.0"
+    calculation_version: str = "tier1-v2.3.0"
+
+    @property
+    def min_dividend_yield_ttm(self) -> float:
+        """Compatibility alias; new decisions use the fiscal-year metric."""
+        return self.min_latest_fiscal_year_dividend_yield
 
     def __post_init__(self) -> None:
         if self.trend_rule not in {"POSITIVE_GROWTH", "STRICT_IMPROVEMENT"}:

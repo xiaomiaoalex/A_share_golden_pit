@@ -208,6 +208,11 @@ def _validate_financials(data: Iterable, as_of_date: date) -> list[QualityIssue]
 
 def _validate_dividends(data, as_of_date: date) -> list[QualityIssue]:
     issues = []
+    annual_periods_in_ttm = set()
+    try:
+        window_start = as_of_date.replace(year=as_of_date.year - 1)
+    except ValueError:
+        window_start = as_of_date.replace(year=as_of_date.year - 1, day=28)
     for event in data.events:
         if event.ex_date > as_of_date:
             issues.append(
@@ -236,6 +241,29 @@ def _validate_dividends(data, as_of_date: date) -> list[QualityIssue]:
                     blocking=True,
                 )
             )
+        if event.report_period is None:
+            issues.append(
+                _issue(
+                    "MISSING_DIVIDEND_REPORT_PERIOD",
+                    QualitySeverity.HIGH,
+                "已实施分红缺少利润归属报告期，不能判定最新完整会计年度股息率",
+                    blocking=False,
+                )
+            )
+        elif (
+            (event.report_period.month, event.report_period.day) == (12, 31)
+            and window_start < event.ex_date <= as_of_date
+        ):
+            annual_periods_in_ttm.add(event.report_period)
+    if len(annual_periods_in_ttm) > 1:
+        issues.append(
+            _issue(
+                "OVERLAPPING_ANNUAL_DIVIDEND_REPORT_PERIODS",
+                QualitySeverity.HIGH,
+                "过去一年实施窗口同时包含多个12-31归属报告期："
+                + ", ".join(str(item) for item in sorted(annual_periods_in_ttm)),
+            )
+        )
     for action in data.actions:
         if action.effective_date > as_of_date:
             issues.append(
@@ -312,10 +340,7 @@ def assess_envelope(
             )
         )
     elif capability == CapabilityLevel.LIMITED and semantic_data:
-        hard_condition = field_group in {
-            "dividend_and_actions",
-            "risk_warning_status",
-        }
+        hard_condition = field_group == "risk_warning_status"
         issues.append(
             _issue(
                 "LIMITED_SOURCE_CAPABILITY",

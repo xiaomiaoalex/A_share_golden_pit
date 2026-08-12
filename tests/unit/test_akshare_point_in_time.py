@@ -103,6 +103,7 @@ def test_dividend_adapter_preserves_raw_per_share_and_action_factor():
     result = provider.get_dividend_bundle("000001", date(2026, 8, 10))
     assert result.data.events[0].raw_cash_per_share_pre_tax == 0.6
     assert result.data.events[0].provider_adjusted is False
+    assert result.data.events[0].report_period == date(2025, 12, 31)
     assert result.data.actions[0].share_factor == 2.0
 
 

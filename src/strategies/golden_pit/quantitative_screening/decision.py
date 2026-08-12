@@ -31,6 +31,10 @@ class DecisionInput:
     dividend_yield_ttm: Optional[float]
     dividend_ttm_raw_per_share: Optional[float]
     dividend_ttm_adjusted_per_share: Optional[float]
+    latest_fiscal_year: Optional[int]
+    latest_fiscal_year_dividend_yield: Optional[float]
+    latest_fiscal_year_dividend_raw_per_share: Optional[float]
+    latest_fiscal_year_dividend_adjusted_per_share: Optional[float]
     risk_warning: Optional[bool]
     quarterly_window: list[QuarterlyMetric]
     error_fields: list[str] = field(default_factory=list)
@@ -62,13 +66,13 @@ def evaluate_tier1(
     elif not pe < config.max_pe_ttm:
         failures.append(_failure("pe_ttm", pe, "<", config.max_pe_ttm))
 
-    dividend_yield = valid_number(data.dividend_yield_ttm)
+    dividend_yield = valid_number(data.latest_fiscal_year_dividend_yield)
     if dividend_yield is None or dividend_yield < 0:
-        pending.append("dividend_yield_ttm")
+        pending.append("latest_fiscal_year_dividend_yield")
     elif not dividend_yield > config.min_dividend_yield_ttm:
         failures.append(
             _failure(
-                "dividend_yield_ttm",
+                "latest_fiscal_year_dividend_yield",
                 dividend_yield,
                 ">",
                 config.min_dividend_yield_ttm,
@@ -200,9 +204,17 @@ def evaluate_tier1(
         supplier_pe_ttm=valid_number(data.supplier_pe_ttm, positive=True),
         self_pe_ttm=valid_number(data.self_pe_ttm, positive=True),
         pe_selection_method=data.pe_selection_method,
-        dividend_yield_ttm=dividend_yield,
+        dividend_yield_ttm=valid_number(data.dividend_yield_ttm),
         dividend_ttm_raw_per_share=valid_number(data.dividend_ttm_raw_per_share),
         dividend_ttm_adjusted_per_share=valid_number(data.dividend_ttm_adjusted_per_share),
+        latest_fiscal_year=data.latest_fiscal_year,
+        latest_fiscal_year_dividend_yield=dividend_yield,
+        latest_fiscal_year_dividend_raw_per_share=valid_number(
+            data.latest_fiscal_year_dividend_raw_per_share
+        ),
+        latest_fiscal_year_dividend_adjusted_per_share=valid_number(
+            data.latest_fiscal_year_dividend_adjusted_per_share
+        ),
         risk_warning=risk_warning,
         trend_quarters=[item.quarter.isoformat() for item in window],
         revenue_yoy_sequence=revenue_sequence,

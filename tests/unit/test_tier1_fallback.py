@@ -1,7 +1,13 @@
 from datetime import date, datetime
 
-from src.data.point_in_time.contracts import DataEnvelope, FetchStatus, UniverseItem
+from src.data.point_in_time.contracts import (
+    DataEnvelope,
+    DividendBundle,
+    FetchStatus,
+    UniverseItem,
+)
 from src.data.point_in_time.fallback import FallbackPointInTimeProvider
+from src.data.point_in_time.models import DividendEvent
 from src.screening.tier1_v2.contracts import MarketSnapshot
 
 
@@ -42,6 +48,42 @@ class DividendProvider:
     def get_dividend_bundle(self, symbol, as_of_date):
         self.call_count += 1
         return envelope(FetchStatus.EMPTY, data=(), provider=self.provider_name)
+
+
+class DividendBundleProvider:
+    def __init__(self, provider_name, event):
+        self.provider_name = provider_name
+        self.event = event
+        self.today = date(2026, 8, 10)
+        self.current_window_days = 7
+
+    def get_dividend_bundle(self, symbol, as_of_date):
+        return DataEnvelope(
+            FetchStatus.SUCCESS,
+            DividendBundle((self.event,), ()),
+            self.provider_name,
+            "dividend",
+            {},
+        )
+
+
+class RecoveringDividendProvider(DividendBundleProvider):
+    def __init__(self, provider_name, event):
+        super().__init__(provider_name, event)
+        self.calls = 0
+
+    def get_dividend_bundle(self, symbol, as_of_date):
+        self.calls += 1
+        if self.calls == 1:
+            return DataEnvelope(
+                FetchStatus.ERROR,
+                None,
+                self.provider_name,
+                "dividend",
+                {},
+                error_message="temporary failure",
+            )
+        return super().get_dividend_bundle(symbol, as_of_date)
 
 
 def envelope(status, data=None, provider="source"):
@@ -126,16 +168,50 @@ def test_recent_universe_can_use_current_limited_source():
     assert limited.call_count == 1
 
 
-def test_exact_capability_is_preferred_over_configured_limited_source():
-    limited = DividendProvider("AKShare")
-    exact = DividendProvider("BaoStock")
+def test_report_period_capable_dividend_source_is_preferred():
+    exact = DividendProvider("AKShare")
+    limited = DividendProvider("BaoStock")
     provider = FallbackPointInTimeProvider(limited, exact)
 
     result = provider.get_dividend_bundle("000001", date(2026, 8, 10))
 
-    assert result.provider == "BaoStock"
+    assert result.provider == "AKShare"
     assert exact.call_count == 1
     assert limited.call_count == 0
+
+
+def test_missing_baostock_report_period_is_enriched_from_akshare():
+    base = DividendEvent(
+        "000550", date(2026, 7, 14), 0.55581, "实施分配", "BaoStock"
+    )
+    supplement = DividendEvent(
+        "000550",
+        date(2026, 7, 14),
+        0.55581,
+        "实施分配",
+        "AKShare",
+        report_period=date(2025, 12, 31),
+    )
+    provider = FallbackPointInTimeProvider(
+        DividendBundleProvider("BaoStock", base),
+        RecoveringDividendProvider("AKShare", supplement),
+    )
+    result = provider.get_dividend_bundle("000550", date(2026, 8, 10))
+
+    assert result.data.events[0].report_period == date(2025, 12, 31)
+
+
+def test_unresolved_report_period_is_preserved_as_missing_with_warning():
+    base = DividendEvent(
+        "000550", date(2026, 7, 14), 0.55581, "实施分配", "BaoStock"
+    )
+    provider = FallbackPointInTimeProvider(
+        DividendBundleProvider("BaoStock", base)
+    )
+    result = provider.get_dividend_bundle("000550", date(2026, 8, 10))
+
+    assert result.data.events[0].report_period is None
+    assert any("硬筛选保持PARTIAL" in item for item in result.quality_warnings)
 
 
 def test_repeated_provider_failures_open_circuit_and_use_backup():

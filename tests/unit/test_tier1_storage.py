@@ -62,6 +62,37 @@ def test_same_symbol_and_as_of_can_coexist_in_different_runs(tmp_path):
     assert run1 != run2
 
 
+def test_new_calculation_contract_supersedes_old_decision_without_mutation(tmp_path):
+    repository = Tier1Repository(tmp_path / "supersession.db")
+    old_config = Tier1Config(calculation_version="tier1-v2.2.0")
+    old_run = repository.begin_run(date(2026, 8, 10), old_config)
+    old_decision = evaluate_tier1(decision_input(), old_config)
+    old_id = repository.save_decision(old_run, old_decision)
+    repository.finish_run(old_run, status="FINISHED", universe_size=1)
+
+    new_config = Tier1Config()
+    new_run = repository.begin_run(date(2026, 8, 10), new_config)
+    new_decision = evaluate_tier1(
+        decision_input(latest_fiscal_year_dividend_yield=0.034), new_config
+    )
+    new_id = repository.save_decision(new_run, new_decision)
+
+    with repository.connect() as connection:
+        edge = connection.execute(
+            "SELECT * FROM tier1_decision_supersessions"
+        ).fetchone()
+        old = connection.execute(
+            "SELECT screen_status FROM tier1_decisions WHERE decision_id=?",
+            (old_id,),
+        ).fetchone()
+
+    assert edge["old_decision_id"] == old_id
+    assert edge["new_decision_id"] == new_id
+    assert edge["old_run_id"] == old_run
+    assert edge["new_run_id"] == new_run
+    assert old["screen_status"] == "PASS"
+
+
 def test_retries_append_decision_history_and_refresh_current_snapshot(tmp_path):
     repository = Tier1Repository(tmp_path / "history.db")
     run_id = repository.begin_run(date(2026, 8, 10), Tier1Config())
@@ -204,6 +235,7 @@ def test_existing_stage_a_database_upgrades_to_quality_migration(tmp_path):
         "005_tier1_resume",
         "006_strategy_identity",
         "golden-pit:007_execution_integrity",
+        "golden-pit:008_fiscal_year_dividend",
     }
 
 

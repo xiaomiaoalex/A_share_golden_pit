@@ -57,6 +57,11 @@ MIGRATIONS = (
         "007_execution_integrity_up.sql",
         "Append-only decisions, release manifests and execution integrity",
     ),
+    (
+        "golden-pit:008_fiscal_year_dividend",
+        "008_fiscal_year_dividend_up.sql",
+        "Latest complete fiscal-year dividend and immutable decision supersession",
+    ),
 )
 MIGRATION_VERSION = MIGRATIONS[-1][0]
 
@@ -220,10 +225,17 @@ class Tier1Repository:
             / "migrations"
             / "007_execution_integrity_down.sql"
         )
+        fiscal_dividend_down = (
+            self.project_root
+            / "scripts"
+            / "migrations"
+            / "008_fiscal_year_dividend_down.sql"
+        )
         with self.connect() as connection:
             self._execute_scripts_atomically(
                 connection,
                 [
+                    fiscal_dividend_down.read_text(encoding="utf-8"),
                     integrity_down.read_text(encoding="utf-8"),
                     strategy_identity_down.read_text(encoding="utf-8"),
                     resume_down.read_text(encoding="utf-8"),
@@ -235,7 +247,8 @@ class Tier1Repository:
                     "('001_tier1_v2','002_tier1_data_quality',"
                     "'003_tier2_human_ai','004_tier3_risk_filter',"
                     "'005_tier1_resume','006_strategy_identity',"
-                    "'golden-pit:007_execution_integrity');",
+                    "'golden-pit:007_execution_integrity',"
+                    "'golden-pit:008_fiscal_year_dividend');",
                 ],
             )
 
@@ -1129,14 +1142,17 @@ class Tier1Repository:
                     business_status, data_status, screen_status, selected_pe_ttm,
                     supplier_pe_ttm, self_pe_ttm, pe_selection_method,
                     dividend_yield_ttm, dividend_ttm_raw_per_share,
-                    dividend_ttm_adjusted_per_share, risk_warning,
+                    dividend_ttm_adjusted_per_share,
+                    latest_fiscal_year, latest_fiscal_year_dividend_yield,
+                    latest_fiscal_year_dividend_raw_per_share,
+                    latest_fiscal_year_dividend_adjusted_per_share, risk_warning,
                     trend_quarters_json, revenue_yoy_sequence_json,
                     parent_np_yoy_sequence_json, failed_conditions_json,
                     pending_fields_json, error_fields_json, skipped_fields_json,
                     not_comparable_reasons_json, quality_warnings_json,
                     secondary_queues_json, calculation_version, created_at,
                     decision_id, decision_version
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(run_id, symbol) DO UPDATE SET
                     stock_name=excluded.stock_name,
                     as_of_date=excluded.as_of_date,
@@ -1151,6 +1167,10 @@ class Tier1Repository:
                     dividend_yield_ttm=excluded.dividend_yield_ttm,
                     dividend_ttm_raw_per_share=excluded.dividend_ttm_raw_per_share,
                     dividend_ttm_adjusted_per_share=excluded.dividend_ttm_adjusted_per_share,
+                    latest_fiscal_year=excluded.latest_fiscal_year,
+                    latest_fiscal_year_dividend_yield=excluded.latest_fiscal_year_dividend_yield,
+                    latest_fiscal_year_dividend_raw_per_share=excluded.latest_fiscal_year_dividend_raw_per_share,
+                    latest_fiscal_year_dividend_adjusted_per_share=excluded.latest_fiscal_year_dividend_adjusted_per_share,
                     risk_warning=excluded.risk_warning,
                     trend_quarters_json=excluded.trend_quarters_json,
                     revenue_yoy_sequence_json=excluded.revenue_yoy_sequence_json,
@@ -1183,6 +1203,10 @@ class Tier1Repository:
                     decision.dividend_yield_ttm,
                     decision.dividend_ttm_raw_per_share,
                     decision.dividend_ttm_adjusted_per_share,
+                    decision.latest_fiscal_year,
+                    decision.latest_fiscal_year_dividend_yield,
+                    decision.latest_fiscal_year_dividend_raw_per_share,
+                    decision.latest_fiscal_year_dividend_adjusted_per_share,
                     None
                     if decision.risk_warning is None
                     else int(decision.risk_warning),
@@ -1207,7 +1231,62 @@ class Tier1Repository:
                     "UPDATE tier1_item_attempts SET decision_id=? WHERE attempt_id=?",
                     (decision_id, attempt_id),
                 )
+            self._supersede_prior_decisions(
+                connection,
+                run_id=run_id,
+                decision=decision,
+                new_decision_id=decision_id,
+            )
         return decision_id
+
+    @staticmethod
+    def _supersede_prior_decisions(
+        connection: sqlite3.Connection,
+        *,
+        run_id: str,
+        decision: Tier1Decision,
+        new_decision_id: str,
+    ) -> None:
+        """Append validity edges without mutating prior decisions or runs."""
+        rows = connection.execute(
+            """
+            SELECT d.decision_id, d.run_id
+            FROM tier1_decisions d
+            JOIN screening_runs r ON r.run_id=d.run_id
+            LEFT JOIN tier1_decision_supersessions s
+              ON s.old_decision_id=d.decision_id
+            WHERE d.symbol=? AND d.as_of_date=? AND d.run_id!=?
+              AND d.decision_id IS NOT NULL AND s.old_decision_id IS NULL
+              AND r.strategy_id='golden-pit'
+              AND r.status IN ('FINISHED','FINISHED_WITH_ERRORS')
+              AND d.calculation_version!=?
+            """,
+            (
+                decision.symbol,
+                decision.as_of_date.isoformat(),
+                run_id,
+                decision.calculation_version,
+            ),
+        ).fetchall()
+        for row in rows:
+            connection.execute(
+                """
+                INSERT INTO tier1_decision_supersessions(
+                    old_decision_id, new_decision_id, symbol, as_of_date,
+                    old_run_id, new_run_id, reason, invalidated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    row["decision_id"],
+                    new_decision_id,
+                    decision.symbol,
+                    decision.as_of_date.isoformat(),
+                    row["run_id"],
+                    run_id,
+                    "CALCULATION_CONTRACT_SUPERSEDED:LATEST_COMPLETE_FISCAL_YEAR_DIVIDEND",
+                    datetime.now().isoformat(),
+                ),
+            )
 
     def save_lineage(
         self,
