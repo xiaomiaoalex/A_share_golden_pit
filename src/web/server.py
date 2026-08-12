@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import hashlib
 import hmac
+import ipaddress
 import json
 import mimetypes
 import os
+import socket
 import sqlite3
 import sys
 import threading
@@ -33,7 +36,26 @@ from src.strategies.golden_pit.persistence.tier1_repository import Tier1Reposito
 STATIC_ROOT = Path(__file__).resolve().parent / "static"
 MAX_BODY = 1_000_000
 SERVICE_ID = "a-share-strategy-platform"
-API_CONTRACT_VERSION = 3
+API_CONTRACT_VERSION = 4
+
+
+def _database_instance_id(db_path: str | Path) -> str:
+    canonical = str(Path(db_path).resolve()).casefold().encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()[:16]
+
+
+def _validate_network_exposure(host: str) -> None:
+    """Fail closed when mutation endpoints are exposed beyond this machine."""
+    normalized = host.strip().strip("[]").casefold()
+    is_loopback = normalized == "localhost"
+    try:
+        is_loopback = is_loopback or ipaddress.ip_address(normalized).is_loopback
+    except ValueError:
+        pass
+    if not is_loopback and not os.environ.get("PLATFORM_API_TOKEN", "").strip():
+        raise RuntimeError(
+            "非本机监听必须设置 PLATFORM_API_TOKEN，拒绝暴露无鉴权变更接口"
+        )
 
 
 def prepare_database(db_path: str | Path) -> dict[str, Any]:
@@ -90,6 +112,7 @@ def _health_payload(
         "database": {
             "status": "ready",
             "file": path.name,
+            "instance_id": _database_instance_id(path),
             "migration_count": migration_count,
         },
         "strategies": {"status": "ready", "count": len(strategies)},
@@ -206,7 +229,7 @@ def build_handler(
                 ):
                     query = parse_qs(parsed.query)
                     run_id = query.get("run_id", [None])[0]
-                    compact = query.get("compact", ["0"])[0] == "1"
+                    compact = query.get("compact", ["1"])[0] != "0"
                     module = strategy_registry.get(parts[2])
                     value = (
                         module.overview(run_id, compact=True)
@@ -262,7 +285,9 @@ def build_handler(
                     run_id = parse_qs(parsed.query).get("run_id", [None])[0]
                     self._json(
                         HTTPStatus.OK,
-                        strategy_registry.get("golden-pit").overview(run_id),
+                        strategy_registry.get("golden-pit").overview(
+                            run_id, compact=True
+                        ),
                     )
                     return
                 if parsed.path == "/api/jobs":
@@ -481,22 +506,38 @@ def _display_url(host: str, port: int) -> str:
     return f"http://{browser_host}:{port}"
 
 
-def _is_our_service(url: str) -> bool:
+def _is_our_service(url: str, db_path: str | Path | None = None) -> bool:
     try:
         with urlopen(f"{url}/api/health", timeout=0.5) as response:
             payload = json.load(response)
-        return (
+        matches = (
             payload.get("service") == SERVICE_ID
             and payload.get("status") == "ok"
             and payload.get("api_contract_version") == API_CONTRACT_VERSION
         )
+        if db_path is not None:
+            matches = matches and payload.get("database", {}).get(
+                "instance_id"
+            ) == _database_instance_id(db_path)
+        return matches
     except (OSError, URLError, ValueError, json.JSONDecodeError):
         return False
 
 
-def _open_browser_when_ready(url: str, attempts: int = 40) -> None:
+def _port_is_listening(host: str, port: int) -> bool:
+    target = "127.0.0.1" if host in {"0.0.0.0", "::"} else host
+    try:
+        with socket.create_connection((target, port), timeout=0.25):
+            return True
+    except OSError:
+        return False
+
+
+def _open_browser_when_ready(
+    url: str, db_path: str | Path, attempts: int = 40
+) -> None:
     for _ in range(attempts):
-        if _is_our_service(url):
+        if _is_our_service(url, db_path):
             webbrowser.open(url)
             return
         time.sleep(0.25)
@@ -514,8 +555,14 @@ def _bind_server(
     last_error: OSError | None = None
     for candidate in candidates:
         existing_url = _display_url(host, candidate)
-        if candidate and _is_our_service(existing_url):
-            return None, existing_url
+        if candidate and _port_is_listening(host, candidate):
+            if _is_our_service(existing_url, db_path):
+                return None, existing_url
+            last_error = OSError(
+                10048,
+                f"端口 {candidate} 已由其他服务或另一数据库实例占用",
+            )
+            continue
         server: ThreadingHTTPServer | None = None
         try:
             server = ThreadingHTTPServer(
@@ -546,6 +593,7 @@ def run_server(
     port: int = 8765,
     open_browser: bool = True,
 ) -> None:
+    _validate_network_exposure(host)
     database = prepare_database(db_path)
     print(
         "数据库预检通过: "
@@ -565,7 +613,7 @@ def run_server(
     if open_browser:
         threading.Thread(
             target=_open_browser_when_ready,
-            args=(url,),
+            args=(url, db_path),
             name="platform-browser-launcher",
             daemon=True,
         ).start()

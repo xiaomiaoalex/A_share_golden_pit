@@ -690,6 +690,34 @@ class Tier1Repository:
                 (run_id, worker_token),
             )
 
+    def active_run(self) -> dict[str, Any] | None:
+        """Return the newest run protected by a non-expired Worker lease."""
+        now = datetime.now().isoformat()
+        with self.connect() as connection:
+            required = {"screening_runs", "screening_run_leases"}
+            existing = {
+                str(row[0])
+                for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                ).fetchall()
+            }
+            if not required.issubset(existing):
+                return None
+            row = connection.execute(
+                """
+                SELECT r.run_id, r.as_of_date, r.started_at, l.process_id,
+                       l.heartbeat_at, l.lease_expires_at
+                FROM screening_runs r
+                JOIN screening_run_leases l ON l.run_id=r.run_id
+                WHERE r.strategy_id='golden-pit' AND r.status='RUNNING'
+                  AND l.lease_expires_at>?
+                  AND l.worker_token NOT LIKE 'controller:%'
+                ORDER BY r.started_at DESC, r.rowid DESC LIMIT 1
+                """,
+                (now,),
+            ).fetchone()
+        return dict(row) if row is not None else None
+
     def control_run(
         self,
         run_id: str,

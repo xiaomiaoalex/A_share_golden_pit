@@ -1,0 +1,9 @@
+# Runtime direct dependency lock used by container deployments.
+# Transitive resolution is validated in CI; update deliberately with provider canaries.
+akshare==1.18.60
+baostock==0.9.3
+tushare==1.4.29
+pandas==2.3.3
+jsonschema==4.26.0
+duckdb==1.5.5
+psutil==7.2.2

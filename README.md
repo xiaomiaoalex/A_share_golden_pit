@@ -144,8 +144,15 @@ python web_app.py --db data/db/strategy_platform.db --port 9000 --no-browser
 Docker 环境可一条命令启动同一套前后端：
 
 ```bash
+# Linux/macOS
+export PLATFORM_API_TOKEN='请替换为高强度随机令牌'
+# Windows PowerShell
+$env:PLATFORM_API_TOKEN='请替换为高强度随机令牌'
 docker compose up --build
 ```
+
+Docker 会监听 `0.0.0.0`，因此必须显式配置变更接口令牌；未配置时服务拒绝启动。
+浏览器首次执行暂停、恢复、发布或审批等变更操作时会请求该令牌，并只保存在当前会话。
 
 路线图阶段验收、外部框架边界和生产前检查见
 [`docs/roadmap_acceptance_matrix.md`](docs/roadmap_acceptance_matrix.md)。数据库备份使用：
@@ -154,6 +161,9 @@ docker compose up --build
 python scripts/backup_database.py data/db/strategy_platform.db output/strategy_platform.backup.db
 python scripts/dependency_inventory.py
 ```
+
+在线备份会输出进度并在默认 15 分钟后安全超时；大型数据库可通过
+`--timeout 3600` 延长。失败或中断时会删除不完整目标，不会留下可被误用的半成品。
 
 平台通过策略注册表隔离数据、策略、执行和展示层。新增策略可内置注册，也可发布
 `a_share_strategy_platform.strategies` Python entry point，由平台启动时自动发现；只需

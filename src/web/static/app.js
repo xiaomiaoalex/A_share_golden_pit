@@ -9,7 +9,7 @@ const StrategyConsole = (() => {
   const $ = (selector, root = document) => root.querySelector(selector);
   const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
   const esc = value => String(value ?? '').replace(/[&<>'"]/g, character => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[character]));
-  const statusLabels = {ACTIVE:'运行中', BETA:'试运行', PAUSED:'已暂停', RUNNING:'运行中', FINISHED:'已完成', FINISHED_WITH_ERRORS:'完成但有异常', INTERRUPTED:'已中断'};
+  const statusLabels = {ACTIVE:'运行中', BETA:'试运行', PREVIEW:'开发预览', PAUSED:'已暂停', RUNNING:'运行中', FINISHED:'已完成', FINISHED_WITH_ERRORS:'完成但有异常', INTERRUPTED:'已中断'};
   const reportActions = {DRAFT:[['validate','自动校验']], VALIDATED:[['review','送交审核'],['reject','驳回']], IN_REVIEW:[['publish','批准发布'],['reject','驳回']]};
   const releaseActions = {DRAFT:[['validate','验证通过']], VALIDATED:[['shadow','进入 Shadow']], SHADOW:[['production','发布生产'],['disable','停用']], PRODUCTION:[['disable','停用']], DISABLED:[['shadow','恢复 Shadow'],['archive','归档']]};
 

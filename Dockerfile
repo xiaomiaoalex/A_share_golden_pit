@@ -22,12 +22,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# 复制依赖文件
-COPY requirements.txt .
+# 复制经过 CI 验证的直接依赖锁
+COPY requirements-runtime-lock.txt .
 
 # 安装Python依赖
 RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt
+    pip install --no-cache-dir -r requirements-runtime-lock.txt
 
 # 复制项目文件
 COPY . .

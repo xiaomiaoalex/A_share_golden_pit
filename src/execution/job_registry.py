@@ -14,6 +14,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import psutil
+
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_DB = PROJECT_ROOT / "data" / "db" / "platform_jobs.db"
 
@@ -39,8 +41,12 @@ class JobRegistry:
         self.max_concurrent = max_concurrent
         self.max_pending = max_pending
         self._processes: dict[str, subprocess.Popen[str]] = {}
+        self._adopted_processes: dict[str, psutil.Process] = {}
         self._process_lock = threading.Lock()
-        queued = self._initialize()
+        queued, adopted = self._initialize()
+        for job_id, process in adopted:
+            self._adopted_processes[job_id] = process
+            self._start_adopted_monitor(job_id, process)
         for job_id, command in queued:
             self._start_worker(job_id, command)
 
@@ -51,7 +57,9 @@ class JobRegistry:
         connection.execute("PRAGMA busy_timeout=10000")
         return connection
 
-    def _initialize(self) -> list[tuple[str, list[str]]]:
+    def _initialize(
+        self,
+    ) -> tuple[list[tuple[str, list[str]]], list[tuple[str, psutil.Process]]]:
         with self._connect() as connection:
             existing = connection.execute(
                 "SELECT sql FROM sqlite_master WHERE type='table' AND name='platform_jobs'"
@@ -112,29 +120,138 @@ class JobRegistry:
                 ON platform_jobs(status, queued_at)
                 """
             )
-            connection.execute(
+            adopted: list[tuple[str, psutil.Process]] = []
+            running_rows = connection.execute(
                 """
-                UPDATE platform_jobs
-                SET status='INTERRUPTED', finished_at=?, return_code=-1,
-                    output=CASE WHEN output='' THEN ? ELSE output || char(10) || ? END
+                SELECT job_id, command_json, process_id, status, return_code
+                FROM platform_jobs
                 WHERE status='RUNNING'
-                """,
-                (
-                    _now(),
-                    "任务执行器重启；正式筛选可从运行记录断点续跑。",
-                    "任务执行器重启；正式筛选可从运行记录断点续跑。",
-                ),
-            )
+                   OR (status='INTERRUPTED' AND return_code=-1)
+                """
+            ).fetchall()
+            for row in running_rows:
+                command = list(json.loads(row["command_json"]))
+                process = self._matching_process(row["process_id"], command)
+                if process is not None:
+                    if str(row["status"]) == "INTERRUPTED":
+                        connection.execute(
+                            """
+                            UPDATE platform_jobs SET status='RUNNING', finished_at=NULL,
+                                return_code=NULL, heartbeat_at=? WHERE job_id=?
+                            """,
+                            (_now(), row["job_id"]),
+                        )
+                    adopted.append((str(row["job_id"]), process))
+                    self._event(
+                        connection,
+                        str(row["job_id"]),
+                        "ADOPTED",
+                        {"process_id": process.pid},
+                    )
+                    continue
+                if str(row["status"]) != "RUNNING":
+                    continue
+                message = "任务执行器重启且原 Worker 已不存在；可从运行记录断点续跑。"
+                connection.execute(
+                    """
+                    UPDATE platform_jobs
+                    SET status='INTERRUPTED', finished_at=?, return_code=-1,
+                        output=CASE WHEN output='' THEN ? ELSE output || char(10) || ? END
+                    WHERE job_id=? AND status='RUNNING'
+                    """,
+                    (_now(), message, message, row["job_id"]),
+                )
+                self._event(
+                    connection, str(row["job_id"]), "INTERRUPTED", {"reason": message}
+                )
             queued_rows = connection.execute(
                 """
                 SELECT job_id, command_json FROM platform_jobs
                 WHERE status='QUEUED' ORDER BY queued_at
                 """
             ).fetchall()
-        return [
+        queued = [
             (str(row["job_id"]), list(json.loads(row["command_json"])))
             for row in queued_rows
         ]
+        return queued, adopted
+
+    @staticmethod
+    def _matching_process(
+        process_id: Any, command: list[str]
+    ) -> psutil.Process | None:
+        """Return a live process only when the persisted command still matches."""
+        if not process_id:
+            return None
+        try:
+            process = psutil.Process(int(process_id))
+            if not process.is_running() or process.status() == psutil.STATUS_ZOMBIE:
+                return None
+            actual = process.cmdline()
+        except (psutil.NoSuchProcess, psutil.AccessDenied, ValueError, OSError):
+            return None
+        if len(actual) != len(command):
+            return None
+
+        def normalize(value: str, *, executable: bool = False) -> str:
+            if executable:
+                try:
+                    return str(Path(value).resolve()).casefold()
+                except OSError:
+                    pass
+            return value.casefold() if os.name == "nt" else value
+
+        return process if all(
+            normalize(current, executable=index == 0)
+            == normalize(expected, executable=index == 0)
+            for index, (current, expected) in enumerate(zip(actual, command))
+        ) else None
+
+    def _start_adopted_monitor(
+        self, job_id: str, process: psutil.Process
+    ) -> None:
+        threading.Thread(
+            target=self._monitor_adopted,
+            args=(job_id, process),
+            name=f"platform-adopted-{job_id[:8]}",
+            daemon=True,
+        ).start()
+
+    def _monitor_adopted(self, job_id: str, process: psutil.Process) -> None:
+        """Keep an inherited Worker visible and capacity-accounted until it exits."""
+        while True:
+            try:
+                alive = process.is_running() and process.status() != psutil.STATUS_ZOMBIE
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                alive = False
+            with self._connect() as connection:
+                row = connection.execute(
+                    "SELECT status FROM platform_jobs WHERE job_id=?", (job_id,)
+                ).fetchone()
+                if row is None or str(row["status"]) != "RUNNING":
+                    break
+                if not alive:
+                    message = "重启后接管的 Worker 已退出，无法可靠获取退出码；请核对策略运行记录。"
+                    connection.execute(
+                        """
+                        UPDATE platform_jobs SET status='INTERRUPTED', finished_at=?,
+                            return_code=-1,
+                            output=CASE WHEN output='' THEN ? ELSE output || char(10) || ? END
+                        WHERE job_id=? AND status='RUNNING'
+                        """,
+                        (_now(), message, message, job_id),
+                    )
+                    self._event(
+                        connection, job_id, "INTERRUPTED", {"reason": message}
+                    )
+                    break
+                connection.execute(
+                    "UPDATE platform_jobs SET heartbeat_at=? WHERE job_id=?",
+                    (_now(), job_id),
+                )
+            time.sleep(1.0)
+        with self._process_lock:
+            self._adopted_processes.pop(job_id, None)
 
     @staticmethod
     def _upgrade_legacy_status_constraint(connection: sqlite3.Connection) -> None:
@@ -373,9 +490,34 @@ class JobRegistry:
             self._event(connection, job_id, target, {})
         with self._process_lock:
             process = self._processes.get(job_id)
+            adopted = self._adopted_processes.get(job_id)
         if process is not None and process.poll() is None:
-            process.terminate()
+            self._terminate_process_tree(process.pid)
+        if adopted is not None:
+            self._terminate_process_tree(adopted.pid)
         return self.get(job_id)
+
+    @staticmethod
+    def _terminate_process_tree(process_id: int) -> None:
+        """Synchronously stop a managed process tree before capacity is reused."""
+        try:
+            parent = psutil.Process(process_id)
+            processes = [*parent.children(recursive=True), parent]
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            return
+        for process in processes:
+            try:
+                process.terminate()
+            except psutil.NoSuchProcess:
+                pass
+        _, alive = psutil.wait_procs(processes, timeout=5)
+        for process in alive:
+            try:
+                process.kill()
+            except psutil.NoSuchProcess:
+                pass
+        if alive:
+            psutil.wait_procs(alive, timeout=3)
 
     def resume(self, job_id: str) -> dict[str, Any]:
         with self._connect() as connection:

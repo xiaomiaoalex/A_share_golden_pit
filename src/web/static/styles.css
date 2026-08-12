@@ -64,6 +64,7 @@ svg { width: 1.25rem; height: 1.25rem; fill: none; stroke: currentColor; stroke-
 .strategy-nav-mark { width: 23px; height: 23px; display: grid; place-items: center; color: #f0d595; border: 1px solid rgba(240,213,149,.24); border-radius: 7px; background: rgba(240,213,149,.06); font-family: "STSong", serif; font-weight: 700; }
 .strategy-state-dot { margin-left: auto; width: 6px; height: 6px; border-radius: 50%; background: #5cc59b; box-shadow: 0 0 0 3px rgba(92,197,155,.1); }
 .strategy-state-dot.beta { background: #d8aa55; }
+.strategy-state-dot.preview { background: #82908b; box-shadow: 0 0 0 3px rgba(130,144,139,.1); }
 .strategy-state-dot.paused { background: #82908b; }
 .sidebar-bottom { position: relative; z-index: 1; flex: 0 0 auto; margin-top: 0; padding-top: 12px; border-top: 1px solid rgba(255,255,255,.07); }
 .source-health { padding: 13px; display: flex; gap: 10px; align-items: center; border: 1px solid rgba(255,255,255,.08); border-radius: 12px; background: rgba(255,255,255,.035); }
@@ -132,6 +133,7 @@ svg { width: 1.25rem; height: 1.25rem; fill: none; stroke: currentColor; stroke-
 .strategy-version { color: var(--faint); font-family: ui-monospace, monospace; font-size: 8px; letter-spacing: .08em; }
 .strategy-card h2 { margin: 3px 0 0; font-family: "STSong", serif; font-size: 21px; }
 .strategy-status { align-self: start; padding: 5px 8px; color: var(--green-700); border-radius: 999px; background: var(--green-100); font-size: 8px; font-weight: 800; }
+.strategy-status.preview { color: #64716d; background: #edf0ef; }
 .strategy-card > p { min-height: 38px; margin: 20px 0 17px; color: var(--muted); font-size: 11px; line-height: 1.75; }
 .strategy-stage-line { padding: 12px 13px; display: flex; align-items: center; justify-content: space-between; gap: 7px; border: 1px solid var(--line); border-radius: 11px; background: #f8faf9; }
 .strategy-stage-line span { display: inline-flex; align-items: center; gap: 6px; color: #42514c; font-size: 9px; font-weight: 700; white-space: nowrap; }

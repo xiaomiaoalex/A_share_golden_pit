@@ -107,3 +107,23 @@ def test_strategy_actions_expose_pause_and_manual_resume(tmp_path):
     assert "resume-tier1" in resumed.command
     assert run_id in resumed.command
     assert repository.run_record(run_id)["status"] == "INTERRUPTED"
+
+
+def test_new_screen_is_rejected_while_another_worker_lease_is_active(tmp_path):
+    db_path = tmp_path / "single-active-run.db"
+    repository = Tier1Repository(db_path)
+    run_id, token = _running_run(repository)
+    strategy = GoldenPitStrategy(db_path)
+
+    with pytest.raises(ValueError, match=run_id):
+        strategy.handle_action(
+            "run",
+            {"as_of": "2026-08-12", "scope": "symbols", "symbols": ["000001"]},
+        )
+
+    repository.release_run_lease(run_id, token)
+    operation = strategy.handle_action(
+        "run",
+        {"as_of": "2026-08-12", "scope": "symbols", "symbols": ["000001"]},
+    )
+    assert operation.kind == "job"

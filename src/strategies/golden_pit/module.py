@@ -130,6 +130,16 @@ class GoldenPitStrategy:
         return handler(body)
 
     def _run(self, body: dict[str, Any]) -> StrategyOperation:
+        from src.strategies.golden_pit.persistence.tier1_repository import (
+            Tier1Repository,
+        )
+
+        active = Tier1Repository(self.db_path).active_run()
+        if active is not None:
+            raise ValueError(
+                "黄金坑已有运行中的筛选任务 "
+                f"({active['run_id']})，请先在运行记录中暂停或停止后再启动新筛选"
+            )
         as_of = str(body.get("as_of", "")).strip()
         try:
             date.fromisoformat(as_of)

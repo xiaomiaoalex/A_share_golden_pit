@@ -24,7 +24,7 @@ class ExampleStrategy:
     def catalog_entry(self):
         return {**self.descriptor.as_dict(), "metrics": [], "latest_run": None}
 
-    def overview(self, run_id=None):
+    def overview(self, run_id=None, *, compact=False):
         return {"strategy": self.descriptor.as_dict(), "run_id": run_id}
 
     def running_runs(self):

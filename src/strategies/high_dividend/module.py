@@ -13,15 +13,15 @@ class HighDividendStrategy:
     asset_root = Path(__file__).resolve().parent / "static"
     descriptor = StrategyDescriptor(
         strategy_id="high-dividend",
-        name="低估值高股息演示策略",
+        name="低估值高股息策略（开发预览）",
         short_name="高股息",
-        description="用于验证统一策略插件、信号和发布契约的演示策略。",
-        version="demo-v1",
+        description="尚未接入正式数据规则与运行链路，仅用于预览插件框架。",
+        version="preview-v1",
         ui_module="/strategy-assets/high-dividend/app.js",
         ui_template="/strategy-assets/high-dividend/template.html",
-        status="BETA",
+        status="PREVIEW",
         stages=("价值筛选", "股息质量", "统一信号"),
-        capabilities=("契约演示", "统一信号"),
+        capabilities=("插件框架预览",),
         accent="amber",
     )
 

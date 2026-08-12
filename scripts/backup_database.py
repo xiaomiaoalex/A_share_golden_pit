@@ -7,22 +7,58 @@ import argparse
 import hashlib
 import json
 import sqlite3
+import sys
+import time
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 
 
-def backup_database(source: str | Path, destination: str | Path) -> dict[str, object]:
+def backup_database(
+    source: str | Path,
+    destination: str | Path,
+    *,
+    timeout_seconds: float = 900,
+    progress: bool = False,
+) -> dict[str, object]:
     source_path = Path(source).resolve()
     destination_path = Path(destination).resolve()
     if not source_path.is_file():
         raise ValueError(f"源数据库不存在: {source_path}")
     if source_path == destination_path:
         raise ValueError("备份目标不能覆盖源数据库")
+    if timeout_seconds <= 0:
+        raise ValueError("备份超时必须为正数")
     destination_path.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(source_path, timeout=30) as source_db:
-        with sqlite3.connect(destination_path, timeout=30) as destination_db:
-            source_db.backup(destination_db)
-    with sqlite3.connect(destination_path, timeout=30) as backup_db:
+    started = time.monotonic()
+    last_reported = -1
+
+    def report(status: int, remaining: int, total: int) -> None:
+        nonlocal last_reported
+        elapsed = time.monotonic() - started
+        if elapsed > timeout_seconds:
+            raise TimeoutError(f"备份超过 {timeout_seconds:g} 秒，已安全终止")
+        if progress and total:
+            percent = max(0, min(100, int((total - remaining) * 100 / total)))
+            bucket = percent // 5
+            if bucket > last_reported:
+                last_reported = bucket
+                print(
+                    f"[backup] {percent}% ({total - remaining}/{total} pages)",
+                    file=sys.stderr,
+                    flush=True,
+                )
+
+    try:
+        with closing(sqlite3.connect(source_path, timeout=30)) as source_db:
+            with closing(sqlite3.connect(destination_path, timeout=30)) as destination_db:
+                source_db.backup(destination_db, pages=4096, progress=report, sleep=0.1)
+    except BaseException:
+        destination_path.unlink(missing_ok=True)
+        for suffix in ("-wal", "-shm"):
+            Path(f"{destination_path}{suffix}").unlink(missing_ok=True)
+        raise
+    with closing(sqlite3.connect(destination_path, timeout=30)) as backup_db:
         integrity = str(backup_db.execute("PRAGMA integrity_check").fetchone()[0])
         if integrity != "ok":
             raise RuntimeError(f"备份完整性校验失败: {integrity}")
@@ -47,8 +83,24 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="备份并校验策略平台 SQLite 数据库")
     parser.add_argument("source")
     parser.add_argument("destination")
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        default=900,
+        help="最长备份秒数，默认 900",
+    )
     args = parser.parse_args()
-    print(json.dumps(backup_database(args.source, args.destination), ensure_ascii=False))
+    print(
+        json.dumps(
+            backup_database(
+                args.source,
+                args.destination,
+                timeout_seconds=args.timeout,
+                progress=True,
+            ),
+            ensure_ascii=False,
+        )
+    )
     return 0
 
 

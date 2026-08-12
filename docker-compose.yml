@@ -9,6 +9,7 @@ services:
       - ./logs:/app/logs
     environment:
       - TZ=Asia/Shanghai
+      - PLATFORM_API_TOKEN=${PLATFORM_API_TOKEN:?请先设置 PLATFORM_API_TOKEN}
     ports:
       - "8765:8765"
     restart: unless-stopped

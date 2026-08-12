@@ -19,7 +19,7 @@ class StrategyDescriptor:
     version: str
     ui_module: str
     ui_template: str = ""
-    status: Literal["ACTIVE", "BETA", "PAUSED"] = "ACTIVE"
+    status: Literal["ACTIVE", "BETA", "PREVIEW", "PAUSED"] = "ACTIVE"
     stages: tuple[str, ...] = ()
     capabilities: tuple[str, ...] = ()
     accent: str = "emerald"

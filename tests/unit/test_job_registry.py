@@ -152,3 +152,70 @@ def test_queued_jobs_claim_capacity_by_priority(tmp_path):
     assert registry.get(low["job_id"])["status"] == "QUEUED"
     _wait_for(registry, high["job_id"], {"SUCCEEDED"})
     _wait_for(registry, low["job_id"], {"SUCCEEDED"})
+
+
+def test_registry_restart_adopts_live_worker_and_preserves_capacity(tmp_path):
+    db_path = tmp_path / "restart-adoption.db"
+    first_registry = JobRegistry(db_path, max_concurrent=1)
+    running = first_registry.start(
+        [sys.executable, "-c", "import time; time.sleep(1.2)"], "跨重启任务"
+    )
+    _wait_for(first_registry, running["job_id"], {"RUNNING"})
+
+    restarted = JobRegistry(db_path, max_concurrent=1)
+    adopted = restarted.get(running["job_id"])
+    queued = restarted.start([sys.executable, "-c", "print('next')"], "后续任务")
+    time.sleep(0.1)
+
+    assert adopted["status"] == "RUNNING"
+    assert restarted.get(queued["job_id"])["status"] == "QUEUED"
+    assert "ADOPTED" in [
+        item["event_type"] for item in restarted.events(running["job_id"])
+    ]
+    _wait_for(restarted, running["job_id"], {"SUCCEEDED"})
+    _wait_for(restarted, queued["job_id"], {"SUCCEEDED"})
+
+
+def test_registry_restart_interrupts_missing_worker(tmp_path):
+    import json
+    import sqlite3
+
+    db_path = tmp_path / "missing-worker.db"
+    JobRegistry(db_path)
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            """
+            INSERT INTO platform_jobs(
+                job_id, label, command_json, status, queued_at, process_id
+            ) VALUES ('missing', '丢失任务', ?, 'RUNNING', '2026-08-12', 99999999)
+            """,
+            (json.dumps([sys.executable, "-c", "print('never')"]),),
+        )
+
+    restarted = JobRegistry(db_path)
+
+    assert restarted.get("missing")["status"] == "INTERRUPTED"
+
+
+def test_registry_recovers_live_worker_misclassified_by_legacy_restart(tmp_path):
+    import sqlite3
+
+    db_path = tmp_path / "legacy-recovery.db"
+    original = JobRegistry(db_path)
+    running = original.start(
+        [sys.executable, "-c", "import time; time.sleep(.8)"], "遗留误分类任务"
+    )
+    _wait_for(original, running["job_id"], {"RUNNING"})
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            """
+            UPDATE platform_jobs SET status='INTERRUPTED', finished_at='legacy',
+                return_code=-1 WHERE job_id=?
+            """,
+            (running["job_id"],),
+        )
+
+    restarted = JobRegistry(db_path)
+
+    assert restarted.get(running["job_id"])["status"] == "RUNNING"
+    _wait_for(restarted, running["job_id"], {"SUCCEEDED", "INTERRUPTED"}, timeout=3)

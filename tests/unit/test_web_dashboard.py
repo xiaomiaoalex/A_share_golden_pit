@@ -1,7 +1,7 @@
 import json
 import threading
 from datetime import date
-from http.server import ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
@@ -14,7 +14,12 @@ from src.screening.tier1_v2.decision import evaluate_tier1
 from src.storage.tier1_repository import Tier1Repository
 from src.strategies.golden_pit.presentation import _tier2_assessment_view
 from src.web.dashboard import DashboardService
-from src.web.server import _bind_server, build_handler, prepare_database
+from src.web.server import (
+    _bind_server,
+    _validate_network_exposure,
+    build_handler,
+    prepare_database,
+)
 from tests.unit.test_tier1_decision import decision_input
 
 
@@ -64,7 +69,8 @@ def test_health_endpoint_reports_frontend_backend_readiness(tmp_path):
 
     assert result["status"] == "ok"
     assert result["service"] == "a-share-strategy-platform"
-    assert result["api_contract_version"] == 3
+    assert result["api_contract_version"] == 4
+    assert len(result["database"]["instance_id"]) == 16
     assert result["database"]["status"] == "ready"
     assert result["strategies"]["count"] >= 1
 
@@ -109,6 +115,97 @@ def test_startup_reuses_an_existing_platform_process(tmp_path):
 
     assert reused_server is None
     assert reused_url == url
+
+
+def test_startup_does_not_reuse_platform_process_for_another_database(tmp_path):
+    first_db = tmp_path / "first.db"
+    second_db = tmp_path / "second.db"
+    Tier1Repository(first_db).migrate_all()
+    Tier1Repository(second_db).migrate_all()
+    server, _ = _bind_server(first_db, "127.0.0.1", 0)
+    assert server is not None
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        second_server, second_url = _bind_server(
+            second_db, "127.0.0.1", server.server_port, fallback_ports=1
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+    assert second_server is not None
+    try:
+        assert second_server.server_port != server.server_port
+        assert second_url.endswith(f":{second_server.server_port}")
+    finally:
+        second_server.server_close()
+
+
+def test_startup_skips_port_owned_by_non_platform_service(tmp_path):
+    db_path = tmp_path / "fallback.db"
+    Tier1Repository(db_path).migrate_all()
+    occupied = ThreadingHTTPServer(("127.0.0.1", 0), BaseHTTPRequestHandler)
+    thread = threading.Thread(target=occupied.serve_forever, daemon=True)
+    thread.start()
+    try:
+        server, url = _bind_server(
+            db_path, "127.0.0.1", occupied.server_port, fallback_ports=1
+        )
+    finally:
+        occupied.shutdown()
+        occupied.server_close()
+        thread.join(timeout=2)
+
+    assert server is not None
+    try:
+        assert server.server_port != occupied.server_port
+        assert url.endswith(f":{server.server_port}")
+    finally:
+        server.server_close()
+
+
+def test_non_loopback_listener_requires_platform_token(monkeypatch):
+    monkeypatch.delenv("PLATFORM_API_TOKEN", raising=False)
+
+    _validate_network_exposure("127.0.0.1")
+    _validate_network_exposure("::1")
+    with pytest.raises(RuntimeError, match="PLATFORM_API_TOKEN"):
+        _validate_network_exposure("0.0.0.0")
+
+    monkeypatch.setenv("PLATFORM_API_TOKEN", "configured")
+    _validate_network_exposure("0.0.0.0")
+
+
+def test_strategy_overview_is_compact_by_default(tmp_path):
+    db_path = tmp_path / "compact-default.db"
+    repository = Tier1Repository(db_path)
+    repository.migrate_all()
+    run_id = repository.begin_run(date(2026, 8, 10), Tier1Config())
+    for index in range(8):
+        repository.save_decision(
+            run_id, evaluate_tier1(decision_input(symbol=f"{index:06d}"))
+        )
+    server = ThreadingHTTPServer(("127.0.0.1", 0), build_handler(db_path))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        base = f"http://127.0.0.1:{server.server_port}"
+        with urlopen(f"{base}/api/strategies/golden-pit/overview") as response:
+            compact = json.load(response)
+        with urlopen(
+            f"{base}/api/strategies/golden-pit/overview?compact=0"
+        ) as response:
+            full = json.load(response)
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+    assert compact["candidate_total"] == 8
+    assert len(compact["candidates"]) == 5
+    assert len(full["candidates"]) == 8
 
 
 def test_dashboard_projects_formal_tier1_state(tmp_path):
