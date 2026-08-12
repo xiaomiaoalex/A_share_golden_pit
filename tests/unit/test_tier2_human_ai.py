@@ -2,7 +2,7 @@ import hashlib
 import json
 import sqlite3
 import uuid
-from datetime import date
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -212,6 +212,9 @@ def test_ai_result_bound_to_superseded_evidence_is_rejected(tmp_path):
     repository = Tier2Repository(tmp_path / "test.db")
     _, _, old_package = _export_one(repository, tmp_path)
     assessment = _assessment(old_package)
+    newer_created_at = (
+        datetime.fromisoformat(old_package["created_at"]) + timedelta(seconds=1)
+    ).isoformat(timespec="seconds")
     newer = {
         "package_id": str(uuid.uuid4()),
         "run_id": old_package["run_id"],
@@ -223,7 +226,7 @@ def test_ai_result_bound_to_superseded_evidence_is_rejected(tmp_path):
         "coverage_status": "PARTIAL",
         "missing_sections": ["cash_flow_and_capex"],
         "evidence": {"updated": True},
-        "created_at": "2026-08-10T23:59:59",
+        "created_at": newer_created_at,
     }
     repository.save_evidence_package(newer)
     source = tmp_path / "stale.json"

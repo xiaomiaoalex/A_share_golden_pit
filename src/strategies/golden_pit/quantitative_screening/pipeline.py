@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import logging
+import threading
 from dataclasses import replace
 from datetime import date, timedelta
 from typing import Iterable, Optional
 
-from src.strategies.golden_pit.config import Tier1Config
 from src.data.point_in_time.contracts import (
     DataEnvelope,
     DividendBundle,
@@ -15,7 +16,9 @@ from src.data.point_in_time.contracts import (
     UniverseItem,
 )
 from src.data.quality import assess_envelope, gate_envelope
+from src.strategies.golden_pit.config import Tier1Config
 from src.strategies.golden_pit.persistence.tier1_repository import Tier1Repository
+from src.strategies.golden_pit.versioning import build_release_manifest
 
 from .contracts import MarketSnapshot, Tier1Decision
 from .decision import DecisionInput, evaluate_tier1
@@ -32,6 +35,58 @@ from .quarterly import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+class RunLeaseLostError(RuntimeError):
+    """Raised when a worker can no longer prove exclusive ownership of a run."""
+
+
+class _RunLeaseHeartbeat:
+    """Renew the run lease while a slow provider call is still in progress."""
+
+    def __init__(
+        self,
+        repository: Tier1Repository,
+        run_id: str,
+        worker_token: str,
+        *,
+        interval_seconds: float = 30.0,
+    ) -> None:
+        self.repository = repository
+        self.run_id = run_id
+        self.worker_token = worker_token
+        self.interval_seconds = interval_seconds
+        self._stop = threading.Event()
+        self._failure: BaseException | None = None
+        self._thread = threading.Thread(
+            target=self._run,
+            name=f"run-lease-{run_id[:8]}",
+            daemon=True,
+        )
+
+    def start(self) -> None:
+        self.repository.heartbeat_run_lease(self.run_id, self.worker_token)
+        self._thread.start()
+
+    def _run(self) -> None:
+        while not self._stop.wait(self.interval_seconds):
+            try:
+                self.repository.heartbeat_run_lease(self.run_id, self.worker_token)
+            except BaseException as exc:  # pragma: no cover - timing boundary
+                self._failure = exc
+                self._stop.set()
+                return
+
+    def check(self) -> None:
+        if self._failure is not None:
+            raise RunLeaseLostError(
+                "运行租约续期失败，已停止写入以避免并发冲突"
+            ) from self._failure
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._thread.is_alive():
+            self._thread.join(timeout=max(1.0, self.interval_seconds + 1.0))
 
 
 class Tier1Pipeline:
@@ -163,6 +218,12 @@ class Tier1Pipeline:
             raise ValueError(f"未知Tier1 run_id: {run_id}")
         if str(run["calculation_version"]) != self.config.calculation_version:
             raise ValueError("运行计算版本与当前代码不一致，禁止混合口径续跑")
+        stored_manifest = json.loads(run.get("release_manifest_json") or "{}")
+        current_manifest = build_release_manifest(self.config)
+        if stored_manifest.get("strategy_fingerprint") and stored_manifest.get(
+            "strategy_fingerprint"
+        ) != current_manifest.get("strategy_fingerprint"):
+            raise ValueError("策略代码或规则资源已变化，禁止在原运行中混合口径续跑")
         as_of_date = date.fromisoformat(str(run["as_of_date"]))
         if not self.repository.has_run_universe(run_id):
             envelope = self.provider.get_universe(as_of_date)
@@ -214,17 +275,25 @@ class Tier1Pipeline:
         prior_errors: list[str],
     ) -> dict:
         run_errors = list(prior_errors)
+        lease_heartbeat = _RunLeaseHeartbeat(
+            self.repository, run_id, worker_token
+        )
+        lease_heartbeat.start()
         try:
             for index, item in enumerate(universe, start=1):
-                self.repository.heartbeat_run_lease(run_id, worker_token)
+                lease_heartbeat.check()
                 attempt_id = self.repository.begin_item_attempt(
                     run_id, item.symbol, trigger_type
                 )
                 attempt_error = None
                 decision = None
+                lease_lost = False
                 try:
                     decision = self._screen_stock(run_id, item, as_of_date)
-                    self.repository.save_decision(run_id, decision)
+                    lease_heartbeat.check()
+                    self.repository.save_decision(
+                        run_id, decision, attempt_id=attempt_id
+                    )
                     logger.info(
                         "Tier1 v2 %s/%s %s %s/%s trigger=%s",
                         index,
@@ -234,6 +303,10 @@ class Tier1Pipeline:
                         decision.data_status.value,
                         trigger_type,
                     )
+                except RunLeaseLostError as exc:
+                    attempt_error = exc
+                    lease_lost = True
+                    raise
                 except Exception as exc:
                     attempt_error = exc
                     logger.exception("Tier1 v2 单股处理失败 %s", item.symbol)
@@ -259,20 +332,27 @@ class Tier1Pipeline:
                         ),
                         self.config,
                     )
-                    self.repository.save_decision(run_id, decision)
+                    lease_heartbeat.check()
+                    self.repository.save_decision(
+                        run_id, decision, attempt_id=attempt_id
+                    )
                 except BaseException as exc:
                     attempt_error = exc
                     raise
                 finally:
-                    self.repository.finish_item_attempt(
-                        attempt_id,
-                        decision_status=(decision.screen_status if decision else None),
-                        data_status=(
-                            decision.data_status.value if decision else None
-                        ),
-                        error=attempt_error,
-                    )
+                    if not lease_lost:
+                        self.repository.finish_item_attempt(
+                            attempt_id,
+                            decision_status=(
+                                decision.screen_status if decision else None
+                            ),
+                            data_status=(
+                                decision.data_status.value if decision else None
+                            ),
+                            error=attempt_error,
+                        )
 
+            lease_heartbeat.check()
             run_status = (
                 "FINISHED_WITH_ERRORS"
                 if run_errors or self.repository.has_retryable_items(run_id)
@@ -299,6 +379,7 @@ class Tier1Pipeline:
             self.repository.mark_run_interrupted(run_id, exc)
             raise
         finally:
+            lease_heartbeat.stop()
             self.repository.release_run_lease(run_id, worker_token)
 
     def _record_and_gate(

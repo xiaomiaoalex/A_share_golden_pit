@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from importlib import metadata
 from pathlib import Path
 from typing import Iterable
 
@@ -36,7 +37,17 @@ class StrategyRegistry:
 
 
 def build_strategy_registry(db_path: str | Path) -> StrategyRegistry:
-    """Composition root for installed strategies."""
+    """Composition root for built-in and installed strategy plugins."""
     from .golden_pit import GoldenPitStrategy
 
-    return StrategyRegistry([GoldenPitStrategy(db_path)])
+    modules: list[StrategyModule] = [GoldenPitStrategy(db_path)]
+    discovered = metadata.entry_points()
+    entry_points = (
+        discovered.select(group="a_share_strategy_platform.strategies")
+        if hasattr(discovered, "select")
+        else discovered.get("a_share_strategy_platform.strategies", [])
+    )
+    for entry_point in sorted(entry_points, key=lambda item: item.name):
+        factory = entry_point.load()
+        modules.append(factory(db_path))
+    return StrategyRegistry(modules)

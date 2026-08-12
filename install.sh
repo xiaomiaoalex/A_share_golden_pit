@@ -60,5 +60,6 @@ EOF
 
 echo
 echo "安装完成。正式入口："
+echo "  ./start.sh  # 一键启动前端与后端"
 echo "  ./run.sh strategy golden-pit workflow --as-of YYYY-MM-DD --symbols 000651"
 echo "  ./run.sh strategy golden-pit workflow --run-id RUN_ID"

@@ -19,6 +19,7 @@ class UniverseProvider:
         self.provider_name = provider_name
         self.symbols = symbols
         self.today = date(2026, 8, 10)
+        self.current_window_days = 7
         self.call_count = 0
 
     def get_universe(self, as_of_date):
@@ -30,6 +31,17 @@ class UniverseProvider:
             "universe",
             {"as_of_date": as_of_date.isoformat()},
         )
+
+
+class DividendProvider:
+    def __init__(self, provider_name):
+        self.provider_name = provider_name
+        self.today = date(2026, 8, 10)
+        self.call_count = 0
+
+    def get_dividend_bundle(self, symbol, as_of_date):
+        self.call_count += 1
+        return envelope(FetchStatus.EMPTY, data=(), provider=self.provider_name)
 
 
 def envelope(status, data=None, provider="source"):
@@ -101,3 +113,50 @@ def test_historical_universe_fails_closed_without_exact_source():
     assert result.error_type == "NO_QUALIFIED_SOURCE"
     assert akshare.call_count == 0
     assert baostock.call_count == 0
+
+
+def test_recent_universe_can_use_current_limited_source():
+    limited = UniverseProvider("AKShare", ["000001"])
+    provider = FallbackPointInTimeProvider(limited)
+
+    result = provider.get_universe(date(2026, 8, 9))
+
+    assert result.provider == "AKShare"
+    assert [item.symbol for item in result.data] == ["000001"]
+    assert limited.call_count == 1
+
+
+def test_exact_capability_is_preferred_over_configured_limited_source():
+    limited = DividendProvider("AKShare")
+    exact = DividendProvider("BaoStock")
+    provider = FallbackPointInTimeProvider(limited, exact)
+
+    result = provider.get_dividend_bundle("000001", date(2026, 8, 10))
+
+    assert result.provider == "BaoStock"
+    assert exact.call_count == 1
+    assert limited.call_count == 0
+
+
+def test_repeated_provider_failures_open_circuit_and_use_backup():
+    primary = MarketProvider(envelope(FetchStatus.ERROR, provider="primary"))
+    primary.provider_name = "primary"
+    backup_snapshot = MarketSnapshot(
+        "000001", date(2026, 8, 10), 10, 120, 12, 12, "backup"
+    )
+    backup = MarketProvider(
+        envelope(FetchStatus.SUCCESS, backup_snapshot, provider="backup")
+    )
+    backup.provider_name = "backup"
+    provider = FallbackPointInTimeProvider(
+        primary,
+        backup,
+        circuit_failure_threshold=1,
+        circuit_cooldown_seconds=60,
+    )
+
+    provider.get_market_snapshot("000001", date(2026, 8, 10))
+    result = provider.get_market_snapshot("000002", date(2026, 8, 10))
+
+    assert result.provider == "backup"
+    assert result.raw_payload["fallback_trace"][0]["error_type"] == "CIRCUIT_OPEN"

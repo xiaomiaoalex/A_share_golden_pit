@@ -4,20 +4,75 @@ from __future__ import annotations
 
 import json
 import mimetypes
+import sqlite3
 import sys
 import threading
+import time
 import webbrowser
+from datetime import datetime, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
+from urllib.error import URLError
 from urllib.parse import parse_qs, unquote, urlparse
+from urllib.request import urlopen
 
 from src.execution import JobRegistry
 from src.strategies import StrategyRegistry, build_strategy_registry
+from src.strategies.golden_pit.persistence.tier1_repository import Tier1Repository
 
 STATIC_ROOT = Path(__file__).resolve().parent / "static"
 MAX_BODY = 1_000_000
+SERVICE_ID = "a-share-strategy-platform"
+
+
+def prepare_database(db_path: str | Path) -> dict[str, Any]:
+    """Apply all known migrations and verify that the database is writable."""
+    path = Path(db_path)
+    Tier1Repository(path).migrate_all()
+    with sqlite3.connect(path, timeout=10) as connection:
+        connection.execute("PRAGMA busy_timeout=10000")
+        connection.execute("BEGIN IMMEDIATE")
+        connection.execute("CREATE TABLE __platform_startup_probe(value INTEGER)")
+        connection.execute("INSERT INTO __platform_startup_probe(value) VALUES (1)")
+        migration_count = int(
+            connection.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0]
+        )
+        connection.rollback()
+    return {
+        "status": "READY",
+        "file": path.name,
+        "migration_count": migration_count,
+    }
+
+
+def _health_payload(
+    db_path: str | Path,
+    registry: JobRegistry,
+    strategy_registry: StrategyRegistry,
+) -> dict[str, Any]:
+    path = Path(db_path)
+    with sqlite3.connect(path, timeout=2) as connection:
+        connection.execute("SELECT 1").fetchone()
+        migration_count = int(
+            connection.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0]
+        )
+    jobs = registry.list()
+    active_jobs = sum(job["status"] in {"QUEUED", "RUNNING"} for job in jobs)
+    strategies = strategy_registry.catalog()
+    return {
+        "status": "ok",
+        "service": SERVICE_ID,
+        "checked_at": datetime.now(timezone.utc).isoformat(),
+        "database": {
+            "status": "ready",
+            "file": path.name,
+            "migration_count": migration_count,
+        },
+        "strategies": {"status": "ready", "count": len(strategies)},
+        "jobs": {"status": "ready", "active": active_jobs},
+    }
 
 
 def build_handler(
@@ -25,7 +80,8 @@ def build_handler(
     jobs: JobRegistry | None = None,
     strategies: StrategyRegistry | None = None,
 ):
-    registry = jobs or JobRegistry()
+    job_db_path = Path(db_path).with_name(f"{Path(db_path).stem}.jobs.db")
+    registry = jobs or JobRegistry(job_db_path)
     strategy_registry = strategies or build_strategy_registry(db_path)
 
     class ConsoleHandler(BaseHTTPRequestHandler):
@@ -38,6 +94,12 @@ def build_handler(
             parsed = urlparse(self.path)
             try:
                 parts = parsed.path.strip("/").split("/")
+                if parsed.path == "/api/health":
+                    self._json(
+                        HTTPStatus.OK,
+                        _health_payload(db_path, registry, strategy_registry),
+                    )
+                    return
                 if parsed.path == "/api/strategies":
                     self._json(
                         HTTPStatus.OK, {"strategies": strategy_registry.catalog()}
@@ -48,11 +110,59 @@ def build_handler(
                     and parts[:2] == ["api", "strategies"]
                     and parts[3] == "overview"
                 ):
-                    run_id = parse_qs(parsed.query).get("run_id", [None])[0]
-                    self._json(
-                        HTTPStatus.OK,
-                        strategy_registry.get(parts[2]).overview(run_id),
+                    query = parse_qs(parsed.query)
+                    run_id = query.get("run_id", [None])[0]
+                    compact = query.get("compact", ["0"])[0] == "1"
+                    module = strategy_registry.get(parts[2])
+                    value = (
+                        module.overview(run_id, compact=True)
+                        if compact
+                        else module.overview(run_id)
                     )
+                    self._json(HTTPStatus.OK, value)
+                    return
+                if (
+                    len(parts) == 4
+                    and parts[:2] == ["api", "strategies"]
+                    and parts[3] in {"candidates", "quality"}
+                ):
+                    query = parse_qs(parsed.query)
+                    run_id = query.get("run_id", [""])[0]
+                    if not run_id:
+                        raise ValueError("缺少 run_id")
+                    page = self._bounded_int(query, "page", 1, 1, 1_000_000)
+                    if parts[3] == "candidates":
+                        page_size = self._bounded_int(
+                            query, "page_size", 100, 1, 500
+                        )
+                        filters = {
+                            key: query.get(key, ["ALL"])[0]
+                            for key in (
+                                "stageA",
+                                "data",
+                                "pe",
+                                "dividend",
+                                "stageB",
+                                "stageC",
+                            )
+                        }
+                        value = strategy_registry.get(parts[2]).candidates_page(
+                            run_id,
+                            page=page,
+                            page_size=page_size,
+                            query=query.get("q", [""])[0],
+                            filters=filters,
+                            sort_key=query.get("sort", [None])[0],
+                            sort_direction=query.get("direction", ["asc"])[0],
+                        )
+                    else:
+                        page_size = self._bounded_int(
+                            query, "page_size", 200, 1, 500
+                        )
+                        value = strategy_registry.get(parts[2]).quality_page(
+                            run_id, page=page, page_size=page_size
+                        )
+                    self._json(HTTPStatus.OK, value)
                     return
                 if parsed.path == "/api/overview":
                     run_id = parse_qs(parsed.query).get("run_id", [None])[0]
@@ -136,6 +246,20 @@ def build_handler(
                 raise ValueError("请求体必须是 JSON 对象")
             return value
 
+        @staticmethod
+        def _bounded_int(
+            query: dict[str, list[str]],
+            key: str,
+            default: int,
+            minimum: int,
+            maximum: int,
+        ) -> int:
+            try:
+                value = int(query.get(key, [str(default)])[0])
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"{key} 必须为整数") from exc
+            return max(minimum, min(maximum, value))
+
         def _static(self, path: str) -> None:
             if path.startswith("/strategy-assets/"):
                 parts = unquote(path).strip("/").split("/")
@@ -185,18 +309,95 @@ def build_handler(
     return ConsoleHandler
 
 
+def _display_url(host: str, port: int) -> str:
+    browser_host = "127.0.0.1" if host in {"0.0.0.0", "::"} else host
+    return f"http://{browser_host}:{port}"
+
+
+def _is_our_service(url: str) -> bool:
+    try:
+        with urlopen(f"{url}/api/health", timeout=0.5) as response:
+            payload = json.load(response)
+        return payload.get("service") == SERVICE_ID and payload.get("status") == "ok"
+    except (OSError, URLError, ValueError, json.JSONDecodeError):
+        return False
+
+
+def _open_browser_when_ready(url: str, attempts: int = 40) -> None:
+    for _ in range(attempts):
+        if _is_our_service(url):
+            webbrowser.open(url)
+            return
+        time.sleep(0.25)
+    print(f"服务已启动，但健康检查尚未就绪，请手动打开: {url}", file=sys.stderr)
+
+
+def _bind_server(
+    db_path: str | Path,
+    host: str,
+    port: int,
+    *,
+    fallback_ports: int = 10,
+) -> tuple[ThreadingHTTPServer | None, str]:
+    candidates = [0] if port == 0 else list(range(port, port + fallback_ports + 1))
+    last_error: OSError | None = None
+    for candidate in candidates:
+        existing_url = _display_url(host, candidate)
+        if candidate and _is_our_service(existing_url):
+            return None, existing_url
+        server: ThreadingHTTPServer | None = None
+        try:
+            server = ThreadingHTTPServer(
+                (host, candidate), BaseHTTPRequestHandler, bind_and_activate=False
+            )
+            server.server_bind()
+            server.server_activate()
+            try:
+                server.RequestHandlerClass = build_handler(db_path)
+            except Exception:
+                server.server_close()
+                raise
+            return server, _display_url(host, server.server_port)
+        except OSError as exc:
+            if server is not None:
+                server.server_close()
+            last_error = exc
+            if exc.errno not in {98, 10048}:
+                raise
+    raise OSError(
+        f"端口 {port}-{port + fallback_ports} 均不可用，请使用 --port 指定其他端口"
+    ) from last_error
+
+
 def run_server(
     db_path: str | Path,
     host: str = "127.0.0.1",
     port: int = 8765,
     open_browser: bool = True,
 ) -> None:
-    server = ThreadingHTTPServer((host, port), build_handler(db_path))
-    url = f"http://{host}:{port}"
+    database = prepare_database(db_path)
+    print(
+        "数据库预检通过: "
+        f"{database['file']}（{database['migration_count']} 个迁移）"
+    )
+    server, url = _bind_server(db_path, host, port)
+    if server is None:
+        print(f"平台已经在运行: {url}")
+        if open_browser:
+            webbrowser.open(url)
+        return
+    if server.server_port != port and port != 0:
+        print(f"端口 {port} 已占用，已自动切换到 {server.server_port}")
     print(f"多策略选股研究平台已启动: {url}")
+    print(f"前端: {url}  |  后端健康检查: {url}/api/health")
     print("按 Ctrl+C 停止服务")
     if open_browser:
-        threading.Timer(0.5, lambda: webbrowser.open(url)).start()
+        threading.Thread(
+            target=_open_browser_when_ready,
+            args=(url,),
+            name="platform-browser-launcher",
+            daemon=True,
+        ).start()
     try:
         server.serve_forever()
     except KeyboardInterrupt:

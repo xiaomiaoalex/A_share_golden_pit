@@ -34,6 +34,23 @@ const StrategyConsole = (() => {
     renderCatalog();
   }
 
+  async function loadHealth() {
+    const badge = $('#platformHealth');
+    const label = $('#platformHealthText');
+    try {
+      const response = await fetch('/api/health', {cache: 'no-store'});
+      const data = await response.json();
+      if (!response.ok || data.status !== 'ok' || data.database?.status !== 'ready') throw new Error(data.error || '服务未就绪');
+      badge.className = 'platform-health';
+      label.textContent = `前后端已连接 · ${Number(data.strategies?.count || 0)}个策略`;
+      badge.title = `数据库 ${data.database.file} 已就绪；检查时间 ${new Date(data.checked_at).toLocaleString('zh-CN')}`;
+    } catch (error) {
+      badge.className = 'platform-health error';
+      label.textContent = '后端连接异常';
+      badge.title = error.message;
+    }
+  }
+
   async function loadUiTemplate(strategy) {
     if (!strategy.ui_template || loadedTemplates.has(strategy.id)) return;
     const response = await fetch(strategy.ui_template);
@@ -114,6 +131,8 @@ const StrategyConsole = (() => {
 
   async function init() {
     ready = true;
+    await loadHealth();
+    window.setInterval(loadHealth, 30000);
     $('#menuButton').addEventListener('click', () => { $('#sidebar').classList.add('open'); $('#scrim').classList.add('open'); });
     $('#scrim').addEventListener('click', closeSidebar);
     document.addEventListener('click', async event => {

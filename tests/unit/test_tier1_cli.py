@@ -1,3 +1,4 @@
+from datetime import date
 from pathlib import Path
 
 import pandas as pd
@@ -5,6 +6,7 @@ import pytest
 
 import main as platform_cli
 from main import _load_universe_file, _normalize_symbol, build_parser
+from src.strategies.golden_pit.cli import _requires_point_in_time_universe
 
 
 @pytest.mark.parametrize(
@@ -31,6 +33,21 @@ def test_universe_file_deduplicates_symbols(tmp_path: Path):
     assert [item.exchange for item in items] == ["SZ", "BJ"]
 
 
+def test_recent_date_does_not_require_historical_universe_file():
+    assert not _requires_point_in_time_universe(
+        date(2026, 8, 10), date(2026, 8, 11), 7
+    )
+    assert not _requires_point_in_time_universe(
+        date(2026, 8, 4), date(2026, 8, 11), 7
+    )
+
+
+def test_date_outside_recent_window_requires_point_in_time_universe():
+    assert _requires_point_in_time_universe(
+        date(2026, 8, 3), date(2026, 8, 11), 7
+    )
+
+
 def test_help_exposes_only_formal_workflow():
     help_text = build_parser().format_help()
     assert "workflow" in help_text
@@ -48,11 +65,19 @@ def test_removed_legacy_commands_are_unrecognized(command):
 
 def test_platform_strategy_namespace_routes_to_golden_pit(monkeypatch):
     captured = []
-    monkeypatch.setattr(
-        platform_cli,
-        "golden_pit_main",
-        lambda: captured.append(list(platform_cli.sys.argv)),
-    )
+
+    class Module:
+        @staticmethod
+        def cli_main(argv):
+            captured.append(list(argv))
+
+    class Registry:
+        @staticmethod
+        def get(strategy_id):
+            assert strategy_id == "golden-pit"
+            return Module()
+
+    monkeypatch.setattr(platform_cli, "build_strategy_registry", lambda db: Registry())
     monkeypatch.setattr(
         platform_cli.sys,
         "argv",
@@ -61,4 +86,4 @@ def test_platform_strategy_namespace_routes_to_golden_pit(monkeypatch):
 
     platform_cli.main()
 
-    assert captured == [["main.py", "workflow", "--help"]]
+    assert captured == [["workflow", "--help"]]

@@ -11,18 +11,21 @@ import json
 import os
 import socket
 import sqlite3
+import time
 import uuid
+from contextlib import contextmanager
+from dataclasses import asdict
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterable, Optional
 
-from src.strategies.golden_pit.config import Tier1Config
 from src.data.point_in_time.contracts import (
     DataEnvelope,
     DividendBundle,
     UniverseItem,
 )
 from src.data.quality.types import QualityAssessment
+from src.strategies.golden_pit.config import Tier1Config
 from src.strategies.golden_pit.quantitative_screening.contracts import (
     FinancialReportFact,
     QuarterlyMetric,
@@ -30,6 +33,7 @@ from src.strategies.golden_pit.quantitative_screening.contracts import (
     Tier1Decision,
 )
 from src.strategies.golden_pit.quantitative_screening.metrics import DividendCalculation
+from src.strategies.golden_pit.versioning import build_release_manifest
 
 MIGRATIONS = (
     ("001_tier1_v2", "001_tier1_v2_up.sql", "Stage A strict Tier1 v2"),
@@ -47,6 +51,11 @@ MIGRATIONS = (
         "006_strategy_identity",
         "006_strategy_identity_up.sql",
         "Multi-strategy run ownership; historical runs belong to golden-pit",
+    ),
+    (
+        "golden-pit:007_execution_integrity",
+        "007_execution_integrity_up.sql",
+        "Append-only decisions, release manifests and execution integrity",
     ),
 )
 MIGRATION_VERSION = MIGRATIONS[-1][0]
@@ -87,10 +96,12 @@ class Tier1Repository:
         self.project_root = Path(__file__).resolve().parents[4]
 
     def connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(self.db_path)
+        connection = sqlite3.connect(self.db_path, timeout=10)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys=ON")
         connection.execute("PRAGMA journal_mode=WAL")
+        connection.execute("PRAGMA busy_timeout=10000")
+        connection.execute("PRAGMA synchronous=NORMAL")
         return connection
 
     def migrate(self) -> None:
@@ -103,32 +114,68 @@ class Tier1Repository:
         self._apply_migrations(MIGRATIONS + STAGE_B_MIGRATIONS + STAGE_C_MIGRATIONS)
 
     def _apply_migrations(self, migrations) -> None:
-        with self.connect() as connection:
-            for version, filename, description in migrations:
-                applied = False
-                if self._table_exists(connection, "schema_migrations"):
-                    applied = (
-                        connection.execute(
-                            "SELECT 1 FROM schema_migrations WHERE version=?",
-                            (version,),
-                        ).fetchone()
-                        is not None
+        with self._migration_lock():
+            with self.connect() as connection:
+                for version, filename, description in migrations:
+                    applied = False
+                    if self._table_exists(connection, "schema_migrations"):
+                        applied = (
+                            connection.execute(
+                                "SELECT 1 FROM schema_migrations WHERE version=?",
+                                (version,),
+                            ).fetchone()
+                            is not None
+                        )
+                    if applied:
+                        continue
+                    up_path = self.project_root / "scripts" / "migrations" / filename
+                    escaped = tuple(
+                        value.replace("'", "''")
+                        for value in (version, datetime.now().isoformat(), description)
                     )
-                if applied:
+                    registration = (
+                        "INSERT INTO schema_migrations(version, applied_at, description) "
+                        f"VALUES ('{escaped[0]}', '{escaped[1]}', '{escaped[2]}');"
+                    )
+                    self._execute_scripts_atomically(
+                        connection,
+                        [up_path.read_text(encoding="utf-8"), registration],
+                    )
+
+    @contextmanager
+    def _migration_lock(self, timeout_seconds: float = 30.0):
+        """Serialize DDL across local worker and web processes."""
+        lock_path = self.db_path.with_suffix(self.db_path.suffix + ".migration.lock")
+        deadline = time.monotonic() + timeout_seconds
+        descriptor: int | None = None
+        while descriptor is None:
+            try:
+                descriptor = os.open(
+                    lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY
+                )
+                os.write(descriptor, f"{os.getpid()}\n".encode("ascii"))
+            except FileExistsError:
+                try:
+                    stale = time.time() - lock_path.stat().st_mtime > 300
+                except FileNotFoundError:
                     continue
-                up_path = self.project_root / "scripts" / "migrations" / filename
-                escaped = tuple(
-                    value.replace("'", "''")
-                    for value in (version, datetime.now().isoformat(), description)
-                )
-                registration = (
-                    "INSERT INTO schema_migrations(version, applied_at, description) "
-                    f"VALUES ('{escaped[0]}', '{escaped[1]}', '{escaped[2]}');"
-                )
-                self._execute_scripts_atomically(
-                    connection,
-                    [up_path.read_text(encoding="utf-8"), registration],
-                )
+                if stale:
+                    try:
+                        lock_path.unlink()
+                    except FileNotFoundError:
+                        pass
+                    continue
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(f"等待数据库迁移锁超时: {lock_path}")
+                time.sleep(0.1)
+        try:
+            yield
+        finally:
+            os.close(descriptor)
+            try:
+                lock_path.unlink()
+            except FileNotFoundError:
+                pass
 
     @staticmethod
     def _execute_scripts_atomically(
@@ -167,10 +214,17 @@ class Tier1Repository:
         down_path = (
             self.project_root / "scripts" / "migrations" / "001_tier1_v2_down.sql"
         )
+        integrity_down = (
+            self.project_root
+            / "scripts"
+            / "migrations"
+            / "007_execution_integrity_down.sql"
+        )
         with self.connect() as connection:
             self._execute_scripts_atomically(
                 connection,
                 [
+                    integrity_down.read_text(encoding="utf-8"),
                     strategy_identity_down.read_text(encoding="utf-8"),
                     resume_down.read_text(encoding="utf-8"),
                     tier3_down.read_text(encoding="utf-8"),
@@ -180,7 +234,8 @@ class Tier1Repository:
                     "DELETE FROM schema_migrations WHERE version IN "
                     "('001_tier1_v2','002_tier1_data_quality',"
                     "'003_tier2_human_ai','004_tier3_risk_filter',"
-                    "'005_tier1_resume','006_strategy_identity');",
+                    "'005_tier1_resume','006_strategy_identity',"
+                    "'golden-pit:007_execution_integrity');",
                 ],
             )
 
@@ -194,19 +249,21 @@ class Tier1Repository:
     def begin_run(self, as_of_date: date, config: Tier1Config) -> str:
         self.migrate()
         run_id = str(uuid.uuid4())
+        release_manifest = build_release_manifest(config)
         with self.connect() as connection:
             connection.execute(
                 """
                 INSERT INTO screening_runs(
                     run_id, strategy_id, as_of_date, calculation_version, config_json,
-                    status, started_at
-                ) VALUES (?, 'golden-pit', ?, ?, ?, 'RUNNING', ?)
+                    release_manifest_json, status, started_at
+                ) VALUES (?, 'golden-pit', ?, ?, ?, ?, 'RUNNING', ?)
                 """,
                 (
                     run_id,
                     as_of_date.isoformat(),
                     config.calculation_version,
                     _json(config.to_dict()),
+                    _json(release_manifest),
                     datetime.now().isoformat(),
                 ),
             )
@@ -878,7 +935,7 @@ class Tier1Repository:
         with self.connect() as connection:
             connection.executemany(
                 """
-                INSERT OR REPLACE INTO tier1_raw_metrics(
+                INSERT INTO tier1_raw_metrics(
                     metric_name, raw_value, unit, run_id, symbol, report_period,
                     period_type, announcement_date, available_at,
                     source_observation_id, revision_at, raw_json
@@ -912,13 +969,25 @@ class Tier1Repository:
         with self.connect() as connection:
             connection.executemany(
                 """
-                INSERT OR REPLACE INTO tier1_quarterly_series(
+                INSERT INTO tier1_quarterly_series(
                     run_id, symbol, quarter, revenue_single, parent_np_single,
                     prior_year_revenue_single, prior_year_parent_np_single,
                     revenue_yoy, parent_np_yoy, revenue_comparable,
                     parent_np_comparable, formula, missing_fields_json,
                     source_observation_ids_json
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(run_id, symbol, quarter) DO UPDATE SET
+                    revenue_single=excluded.revenue_single,
+                    parent_np_single=excluded.parent_np_single,
+                    prior_year_revenue_single=excluded.prior_year_revenue_single,
+                    prior_year_parent_np_single=excluded.prior_year_parent_np_single,
+                    revenue_yoy=excluded.revenue_yoy,
+                    parent_np_yoy=excluded.parent_np_yoy,
+                    revenue_comparable=excluded.revenue_comparable,
+                    parent_np_comparable=excluded.parent_np_comparable,
+                    formula=excluded.formula,
+                    missing_fields_json=excluded.missing_fields_json,
+                    source_observation_ids_json=excluded.source_observation_ids_json
                 """,
                 rows,
             )
@@ -974,10 +1043,18 @@ class Tier1Repository:
         with self.connect() as connection:
             connection.execute(
                 """
-                INSERT OR REPLACE INTO risk_warning_intervals(
+                INSERT INTO risk_warning_intervals(
                     run_id, symbol, as_of_date, is_risk_warning, security_name,
                     effective_date, source, source_observation_id, reason
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(run_id, symbol) DO UPDATE SET
+                    as_of_date=excluded.as_of_date,
+                    is_risk_warning=excluded.is_risk_warning,
+                    security_name=excluded.security_name,
+                    effective_date=excluded.effective_date,
+                    source=excluded.source,
+                    source_observation_id=excluded.source_observation_id,
+                    reason=excluded.reason
                 """,
                 (
                     run_id,
@@ -994,11 +1071,60 @@ class Tier1Repository:
                 ),
             )
 
-    def save_decision(self, run_id: str, decision: Tier1Decision) -> None:
+    def save_decision(
+        self,
+        run_id: str,
+        decision: Tier1Decision,
+        *,
+        attempt_id: str | None = None,
+    ) -> str:
+        """Append an immutable decision version and refresh the current snapshot."""
+        decision_id = str(uuid.uuid4())
+        decision_json = _json(asdict(decision))
+        decision_hash = hashlib.sha256(decision_json.encode("utf-8")).hexdigest()
         with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            if attempt_id is not None:
+                attempt = connection.execute(
+                    """
+                    SELECT 1 FROM tier1_item_attempts
+                    WHERE attempt_id=? AND run_id=? AND symbol=?
+                    """,
+                    (attempt_id, run_id, decision.symbol),
+                ).fetchone()
+                if attempt is None:
+                    raise ValueError("决策与逐股尝试不属于同一运行及标的")
+            decision_version = int(
+                connection.execute(
+                    """
+                    SELECT COALESCE(MAX(decision_version), 0) + 1
+                    FROM tier1_decision_history WHERE run_id=? AND symbol=?
+                    """,
+                    (run_id, decision.symbol),
+                ).fetchone()[0]
+            )
             connection.execute(
                 """
-                INSERT OR REPLACE INTO tier1_decisions(
+                INSERT INTO tier1_decision_history(
+                    decision_id, run_id, symbol, attempt_id, decision_version,
+                    calculation_version, decision_hash, decision_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    decision_id,
+                    run_id,
+                    decision.symbol,
+                    attempt_id,
+                    decision_version,
+                    decision.calculation_version,
+                    decision_hash,
+                    decision_json,
+                    decision.created_at.isoformat(),
+                ),
+            )
+            connection.execute(
+                """
+                INSERT INTO tier1_decisions(
                     run_id, symbol, stock_name, as_of_date, price_date,
                     business_status, data_status, screen_status, selected_pe_ttm,
                     supplier_pe_ttm, self_pe_ttm, pe_selection_method,
@@ -1008,8 +1134,38 @@ class Tier1Repository:
                     parent_np_yoy_sequence_json, failed_conditions_json,
                     pending_fields_json, error_fields_json, skipped_fields_json,
                     not_comparable_reasons_json, quality_warnings_json,
-                    secondary_queues_json, calculation_version, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    secondary_queues_json, calculation_version, created_at,
+                    decision_id, decision_version
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(run_id, symbol) DO UPDATE SET
+                    stock_name=excluded.stock_name,
+                    as_of_date=excluded.as_of_date,
+                    price_date=excluded.price_date,
+                    business_status=excluded.business_status,
+                    data_status=excluded.data_status,
+                    screen_status=excluded.screen_status,
+                    selected_pe_ttm=excluded.selected_pe_ttm,
+                    supplier_pe_ttm=excluded.supplier_pe_ttm,
+                    self_pe_ttm=excluded.self_pe_ttm,
+                    pe_selection_method=excluded.pe_selection_method,
+                    dividend_yield_ttm=excluded.dividend_yield_ttm,
+                    dividend_ttm_raw_per_share=excluded.dividend_ttm_raw_per_share,
+                    dividend_ttm_adjusted_per_share=excluded.dividend_ttm_adjusted_per_share,
+                    risk_warning=excluded.risk_warning,
+                    trend_quarters_json=excluded.trend_quarters_json,
+                    revenue_yoy_sequence_json=excluded.revenue_yoy_sequence_json,
+                    parent_np_yoy_sequence_json=excluded.parent_np_yoy_sequence_json,
+                    failed_conditions_json=excluded.failed_conditions_json,
+                    pending_fields_json=excluded.pending_fields_json,
+                    error_fields_json=excluded.error_fields_json,
+                    skipped_fields_json=excluded.skipped_fields_json,
+                    not_comparable_reasons_json=excluded.not_comparable_reasons_json,
+                    quality_warnings_json=excluded.quality_warnings_json,
+                    secondary_queues_json=excluded.secondary_queues_json,
+                    calculation_version=excluded.calculation_version,
+                    created_at=excluded.created_at,
+                    decision_id=excluded.decision_id,
+                    decision_version=excluded.decision_version
                 """,
                 (
                     run_id,
@@ -1042,8 +1198,16 @@ class Tier1Repository:
                     _json(decision.secondary_queues),
                     decision.calculation_version,
                     decision.created_at.isoformat(),
+                    decision_id,
+                    decision_version,
                 ),
             )
+            if attempt_id is not None:
+                connection.execute(
+                    "UPDATE tier1_item_attempts SET decision_id=? WHERE attempt_id=?",
+                    (decision_id, attempt_id),
+                )
+        return decision_id
 
     def save_lineage(
         self,
