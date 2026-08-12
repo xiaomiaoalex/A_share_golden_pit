@@ -44,6 +44,8 @@ def build_parser() -> argparse.ArgumentParser:
   python main.py screen-tier1 --as-of 2026-08-10 --symbols 000651 600519
   python main.py verify-tier1-sources --as-of 2026-08-10 --symbols 000651
   python main.py show-tier1 --run-id RUN_ID
+  python main.py resume-tier1 --run-id RUN_ID
+  python main.py retry-tier1-data --run-id RUN_ID
   python main.py export-tier2 --run-id RUN_ID
   python main.py import-tier2 --file ai_results.json
   python main.py review-tier2 --run-id RUN_ID
@@ -67,6 +69,24 @@ def build_parser() -> argparse.ArgumentParser:
     )
     tier1_parser.add_argument('--limit', type=int, help='仅处理前N只，供人工验收')
     tier1_parser.add_argument('--db', default=str(settings.DB_PATH), help='SQLite数据库路径')
+
+    resume_tier1_parser = subparsers.add_parser(
+        'resume-tier1', help='从固化股票池继续未完成的Stage A运行'
+    )
+    resume_tier1_parser.add_argument('--run-id', required=True, help='要续跑的运行ID')
+    resume_tier1_parser.add_argument('--symbols', nargs='+', help='可选：仅续跑指定未完成股票')
+    resume_tier1_parser.add_argument(
+        '--db', default=str(settings.DB_PATH), help='SQLite数据库路径'
+    )
+
+    retry_tier1_parser = subparsers.add_parser(
+        'retry-tier1-data', help='补跑未产生决策、DATA_ERROR或PENDING_DATA标的'
+    )
+    retry_tier1_parser.add_argument('--run-id', required=True, help='要补跑的运行ID')
+    retry_tier1_parser.add_argument('--symbols', nargs='+', help='可选：仅补跑指定股票')
+    retry_tier1_parser.add_argument(
+        '--db', default=str(settings.DB_PATH), help='SQLite数据库路径'
+    )
 
     verify_sources_parser = subparsers.add_parser(
         'verify-tier1-sources', help='对指定股票执行Tier1多源口径交叉验证'
@@ -274,6 +294,48 @@ def _run_tier1_command(args) -> dict:
     return result
 
 
+def _resume_tier1_command(args, *, mode: str) -> dict:
+    from config.tier1 import Tier1Config
+    from src.data.point_in_time.provider_factory import build_point_in_time_provider
+    from src.screening.tier1_v2.pipeline import Tier1Pipeline
+    from src.storage.tier1_repository import Tier1Repository
+
+    repository = Tier1Repository(args.db)
+    repository.migrate()
+    run = repository.run_record(args.run_id)
+    if run is None:
+        raise ValueError(f"未知Tier1 run_id: {args.run_id}")
+    try:
+        tier1_config = Tier1Config(**json.loads(str(run["config_json"])))
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise ValueError("原运行配置快照无效，禁止续跑") from exc
+    symbols = [_normalize_symbol(value) for value in args.symbols] if args.symbols else None
+    provider = build_point_in_time_provider(tier1_config)
+    try:
+        result = Tier1Pipeline(provider, repository, tier1_config).resume(
+            args.run_id,
+            mode=mode,
+            symbols=symbols,
+        )
+    finally:
+        provider.close()
+    print(f"run_id: {result['run_id']}")
+    print(f"status: {result['status']}")
+    print(f"processed_count: {result.get('processed_count', 0)}")
+    print(f"summary: {result.get('summary', {})}")
+    if result.get('errors'):
+        print(f"errors: {result['errors']}")
+    return result
+
+
+def _resume_unfinished_tier1_command(args) -> dict:
+    return _resume_tier1_command(args, mode="unfinished")
+
+
+def _retry_tier1_data_command(args) -> dict:
+    return _resume_tier1_command(args, mode="data_gaps")
+
+
 def _formal_workflow_command(args) -> None:
     from src.storage.tier1_repository import Tier1Repository
     from src.storage.tier2_repository import Tier2Repository
@@ -306,8 +368,10 @@ def _formal_workflow_command(args) -> None:
     tier3_symbols = {row["symbol"] for row in current_tier3_rows}
     missing_tier3 = sorted(tier2_pass_symbols - tier3_symbols)
 
-    if str(run["status"]) not in {"FINISHED", "FINISHED_WITH_ERRORS"}:
-        next_action = "等待或重新执行Stage A"
+    if str(run["status"]) == "INTERRUPTED":
+        next_action = f"python main.py resume-tier1 --run-id {run_id}"
+    elif str(run["status"]) not in {"FINISHED", "FINISHED_WITH_ERRORS"}:
+        next_action = "等待Stage A；若进程已停止可执行 resume-tier1"
     elif not tier1_pass:
         next_action = "Stage A无PASS候选；工作流结束"
     elif missing_tier2:
@@ -727,6 +791,8 @@ def main() -> None:
 
     commands = {
         "screen-tier1": _run_tier1_command,
+        "resume-tier1": _resume_unfinished_tier1_command,
+        "retry-tier1-data": _retry_tier1_data_command,
         "show-tier1": _show_tier1_command,
         "verify-tier1-sources": _verify_tier1_sources_command,
         "tier1-migrate": _migrate_tier1_command,

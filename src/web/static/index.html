@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0b3028">
+  <title>砺金研策 · 多策略选股研究平台</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar" id="sidebar">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 48 48"><path d="M9 31.5 18 22l6.2 6.1L39 12"/><path d="M32 12h7v7"/><path d="M9 39h30"/></svg>
+        </div>
+        <div><strong>砺金研策</strong><span>MULTI-STRATEGY RESEARCH</span></div>
+      </div>
+
+      <nav class="main-nav" aria-label="主导航">
+        <button class="nav-item shell-nav active" data-shell-page="home">
+          <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/></svg>
+          <span>策略总览</span><span class="nav-count" id="strategyNavCount">0</span>
+        </button>
+        <div class="strategy-catalog-nav" id="strategyCatalogNav"></div>
+        <div class="strategy-nav hidden" id="goldenPitNav" data-strategy-nav="golden-pit">
+        <span class="nav-section-label">黄金坑策略</span>
+        <button class="nav-item" data-page="overview">
+          <svg viewBox="0 0 24 24"><path d="M4 13h6V4H4v9Zm0 7h6v-4H4v4Zm10 0h6v-9h-6v9Zm0-16v4h6V4h-6Z"/></svg>
+          <span>策略看板</span>
+        </button>
+        <button class="nav-item" data-page="candidates">
+          <svg viewBox="0 0 24 24"><path d="M4 19V9"/><path d="M10 19V5"/><path d="M16 19v-7"/><path d="M22 19H2"/></svg>
+          <span>候选雷达</span><span class="nav-count" id="candidateNavCount">0</span>
+        </button>
+        <button class="nav-item" data-page="quality">
+          <svg viewBox="0 0 24 24"><path d="m12 3 8 4v5c0 5-3.4 8-8 9-4.6-1-8-4-8-9V7l8-4Z"/><path d="m8.5 12 2.2 2.2 4.8-5"/></svg>
+          <span>数据质量</span>
+        </button>
+        <button class="nav-item" data-page="runs">
+          <svg viewBox="0 0 24 24"><path d="M4 5h16v14H4z"/><path d="M8 3v4M16 3v4M4 10h16"/></svg>
+          <span>运行记录</span>
+        </button>
+        </div>
+      </nav>
+
+      <div class="sidebar-bottom">
+        <div class="source-health"><span class="health-dot"></span><div><strong>本地研究环境</strong><span id="sourceText">正在连接数据…</span></div></div>
+        <p class="disclaimer">研究辅助工具 · 不构成投资建议</p>
+      </div>
+    </aside>
+
+    <main class="main-area">
+      <header class="topbar">
+        <button class="icon-button menu-button" id="menuButton" aria-label="展开菜单">
+          <svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+        </button>
+        <div class="topbar-context">
+          <span class="eyebrow">研究工作台</span>
+          <strong id="pageTitle">策略总览</strong>
+        </div>
+        <div class="topbar-actions">
+          <label class="run-select-wrap strategy-control hidden" title="切换运行记录">
+            <span>数据批次</span>
+            <select id="runSelect" aria-label="选择运行记录"></select>
+          </label>
+          <button class="icon-button strategy-control hidden" id="refreshButton" title="刷新数据">
+            <svg viewBox="0 0 24 24"><path d="M20 6v5h-5"/><path d="M19 11a7 7 0 1 0 .2 5"/></svg>
+          </button>
+          <button class="primary-button strategy-control hidden" id="newScreenButton">
+            <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+            启动新筛选
+          </button>
+        </div>
+      </header>
+
+      <div class="loading-bar" id="loadingBar"></div>
+
+      <section class="page active" id="page-home">
+        <div class="page-heading strategy-home-heading">
+          <div><span class="overline">STRATEGY PORTFOLIO</span><h1>选股策略总览</h1><p>集中查看不同策略的定位、运行状态与候选产出，再进入独立策略工作台。</p></div>
+          <div class="strategy-count-chip"><span>已接入策略</span><strong id="strategyCount">—</strong></div>
+        </div>
+        <div class="strategy-platform-summary panel">
+          <div><span class="panel-kicker">RESEARCH ARCHITECTURE</span><h2>策略相互独立，共享可信基础设施</h2><p>数据、执行与任务观测由平台统一提供；选股规则、结果投影和展示模块由每个策略自行维护。</p></div>
+          <div class="architecture-flow"><span>数据层</span><i>→</i><span>策略层</span><i>→</i><span>执行层</span><i>→</i><span>展示层</span></div>
+        </div>
+        <div class="strategy-grid" id="strategyGrid"></div>
+        <div class="empty-state panel hidden" id="strategyEmpty"><h3>暂未接入选股策略</h3><p>注册策略模块后会自动出现在这里。</p></div>
+      </section>
+
+      <section class="page strategy-page" data-strategy-page="golden-pit" id="page-overview">
+        <div class="page-heading">
+          <div><span class="overline">MARKET RESEARCH DESK</span><h1>黄金坑研究总览</h1><p id="overviewSubtitle">正在载入本地工作流…</p></div>
+          <div class="as-of-chip"><span>研究时点</span><strong id="asOfDate">—</strong></div>
+        </div>
+
+        <div class="kpi-grid">
+          <article class="kpi-card accent-dark"><div class="kpi-icon"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/><path d="M8 11h6M11 8v6"/></svg></div><span>本期覆盖</span><strong id="kpiUniverse">—</strong><small>只股票进入点时筛选</small></article>
+          <article class="kpi-card"><div class="kpi-icon green"><svg viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></svg></div><span>量化初筛通过</span><strong id="kpiStageA">—</strong><small id="kpiStageARate">量化条件通过率</small></article>
+          <article class="kpi-card"><div class="kpi-icon amber"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></div><span>待人工判断</span><strong id="kpiReview">—</strong><small>需要研究员确认</small></article>
+          <article class="kpi-card"><div class="kpi-icon gold"><svg viewBox="0 0 24 24"><path d="M6 3h12v5c0 4-2.7 7-6 7s-6-3-6-7V3Z"/><path d="M8 21h8M12 15v6M6 6H3v2c0 2 1.5 4 4 4M18 6h3v2c0 2 1.5 4 4 4"/></svg></div><span>最终研究池</span><strong id="kpiStageC">—</strong><small>完成风险终审</small></article>
+        </div>
+
+        <div class="overview-grid">
+          <article class="panel pipeline-panel">
+            <div class="panel-header"><div><span class="panel-kicker">WORKFLOW</span><h2>三阶段研究漏斗</h2></div><span class="status-pill" id="runStatus">—</span></div>
+            <div class="pipeline" id="pipeline"></div>
+          </article>
+          <article class="panel action-panel">
+            <div class="action-glow"></div><span class="panel-kicker">NEXT ACTION</span><div class="action-icon"><svg viewBox="0 0 24 24"><path d="M12 3v18M5 10l7-7 7 7"/></svg></div><h2 id="nextActionTitle">正在分析下一步…</h2><p id="nextActionDetail">系统会根据当前状态给出受控操作。</p><button class="secondary-button inverse" id="nextActionButton">查看候选详情 <span>→</span></button>
+          </article>
+        </div>
+
+        <article class="panel candidates-panel">
+          <div class="panel-header table-heading"><div><span class="panel-kicker">CANDIDATE RADAR</span><h2>候选雷达</h2></div><button class="text-button" data-goto="candidates">查看全部 <span>→</span></button></div>
+          <div class="table-wrap"><table><thead><tr><th>公司 / 代码</th><th>量化初筛</th><th>PE (TTM)</th><th>股息率</th><th>营收趋势</th><th>证据研究</th><th></th></tr></thead><tbody id="overviewCandidates"></tbody></table></div>
+          <div class="empty-state hidden" id="overviewEmpty"><div class="empty-icon"><svg viewBox="0 0 24 24"><path d="M4 19V9M10 19V5M16 19v-7M22 19H2"/></svg></div><h3>本批次暂无候选记录</h3><p>启动新筛选后，结果会在这里按状态展示。</p></div>
+        </article>
+      </section>
+
+      <section class="page strategy-page" data-strategy-page="golden-pit" id="page-candidates">
+        <div class="page-heading compact"><div><span class="overline">CANDIDATE RADAR</span><h1>候选雷达</h1><p>逐项核对估值、分红、增长趋势与阶段结论。</p></div></div>
+        <div class="candidate-toolbar panel">
+          <div class="toolbar-primary"><div class="search-box"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg><input id="candidateSearch" placeholder="搜索公司名称或股票代码"></div><div class="toolbar-result"><span class="active-filter-count hidden" id="activeFilterCount">0 项筛选</span><span class="result-count" id="candidateCount">0 条结果</span><button class="reset-filters hidden" id="resetFilters"><svg viewBox="0 0 24 24"><path d="M4 7h16M7 12h10M10 17h4"/></svg>重置</button></div></div>
+          <div class="column-filter-grid">
+            <label><span>量化初筛</span><select data-filter-key="stageA"><option value="ALL">全部状态</option><option value="PASS">通过</option><option value="FAIL">未通过</option><option value="DATA_ERROR">数据异常</option><option value="PENDING_DATA">数据待补</option><option value="TURNAROUND_WATCHLIST">反转观察</option><option value="NOT_COMPARABLE">不可比</option></select></label>
+            <label><span>数据状态</span><select data-filter-key="data"><option value="ALL">全部状态</option><option value="COMPLETE">数据完整</option><option value="PARTIAL">部分数据</option><option value="ERROR">数据异常</option></select></label>
+            <label><span>PE (TTM)</span><select data-filter-key="pe"><option value="ALL">全部区间</option><option value="LT15">低于 15×</option><option value="15TO30">15×–30×</option><option value="GTE30">30×及以上</option><option value="MISSING">数据缺失</option></select></label>
+            <label><span>股息率</span><select data-filter-key="dividend"><option value="ALL">全部区间</option><option value="GT5">高于 5%</option><option value="2TO5">2%–5%</option><option value="LT2">低于 2%</option><option value="MISSING">数据缺失</option></select></label>
+            <label><span>证据研究</span><select data-filter-key="stageB" id="stageBFilter"><option value="ALL">全部状态</option></select></label>
+            <label><span>风险终审</span><select data-filter-key="stageC" id="stageCFilter"><option value="ALL">全部状态</option></select></label>
+          </div>
+        </div>
+        <article class="panel candidates-panel full"><div class="table-wrap"><table><thead><tr><th>公司 / 代码</th><th>量化初筛</th><th>数据状态</th><th><button class="sort-header" data-sort="pe_ttm">PE (TTM)<span class="sort-icon">↕</span></button></th><th><button class="sort-header" data-sort="dividend_yield">股息率<span class="sort-icon">↕</span></button></th><th>证据研究</th><th>风险终审</th><th></th></tr></thead><tbody id="allCandidates"></tbody></table></div><div class="empty-state hidden" id="candidateEmpty"><h3>没有符合当前条件的记录</h3><p>尝试调整列筛选条件，或一键重置全部筛选。</p></div></article>
+      </section>
+
+      <section class="page strategy-page" data-strategy-page="golden-pit" id="page-quality">
+        <div class="page-heading compact"><div><span class="overline">DATA GOVERNANCE</span><h1>数据质量</h1><p>来源能力、字段覆盖和阻断性问题独立于业务结论展示。</p></div><div class="quality-gate" id="qualityGate"><span class="health-dot"></span><div><span>质量闸门</span><strong>—</strong></div></div></div>
+        <div class="quality-summary" id="qualitySummary"></div>
+        <article class="panel"><div class="panel-header"><div><span class="panel-kicker">SOURCE ASSESSMENT</span><h2>来源评估记录</h2></div></div><div class="quality-list" id="qualityList"></div><div class="empty-state hidden" id="qualityEmpty"><h3>暂无质量评估记录</h3><p>运行量化初筛后会自动生成来源能力和质量检查。</p></div></article>
+      </section>
+
+      <section class="page strategy-page" data-strategy-page="golden-pit" id="page-runs">
+        <div class="page-heading compact"><div><span class="overline">RUN HISTORY</span><h1>运行记录</h1><p>查看不同研究时点的筛选范围、状态与完成时间。</p></div></div>
+        <div class="run-list" id="runList"></div><div class="empty-state panel hidden" id="runsEmpty"><h3>还没有运行记录</h3><p>从右上角启动第一次点时筛选。</p></div>
+        <article class="panel jobs-panel hidden" id="jobsPanel"><div class="panel-header"><div><span class="panel-kicker">BACKGROUND JOBS</span><h2>后台任务</h2></div></div><div id="jobList"></div></article>
+      </section>
+    </main>
+  </div>
+
+  <div class="scrim" id="scrim"></div>
+  <aside class="detail-drawer" id="detailDrawer" aria-hidden="true">
+    <div class="drawer-header"><div><span class="overline">CANDIDATE DOSSIER</span><h2 id="drawerTitle">候选详情</h2><p id="drawerSymbol">—</p></div><button class="icon-button" id="closeDrawer" aria-label="关闭"><svg viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg></button></div>
+    <div class="drawer-body" id="drawerBody"></div>
+    <div class="drawer-footer" id="drawerFooter"></div>
+  </aside>
+
+  <dialog class="modal" id="workflowModal">
+    <form id="workflowForm"><div class="modal-header"><div><span class="overline">NEW SCREENING RUN</span><h2>启动点时筛选</h2><p>创建正式量化初筛运行，完成后自动出现在控制台。</p></div><button type="button" class="icon-button modal-close"><svg viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg></button></div>
+      <fieldset class="scope-fieldset"><legend>筛选范围</legend><div class="scope-selector">
+        <label class="scope-option"><input type="radio" name="scope" value="market" checked><span class="scope-radio"></span><span class="scope-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 0 1 0 18M12 3a15 15 0 0 0 0 18"/></svg></span><span class="scope-copy"><strong>一键全市场</strong><small>扫描数据源提供的完整 A 股股票池</small></span><span class="recommend-tag">推荐</span></label>
+        <label class="scope-option"><input type="radio" name="scope" value="symbols"><span class="scope-radio"></span><span class="scope-icon"><svg viewBox="0 0 24 24"><path d="M4 19V9M10 19V5M16 19v-7M22 19H2"/></svg></span><span class="scope-copy"><strong>指定股票</strong><small>适合快速验证或小范围定向研究</small></span></label>
+      </div></fieldset>
+      <div class="form-grid workflow-fields"><label><span>筛选日期</span><input type="date" name="as_of" required></label><label class="full symbols-field hidden"><span>股票代码</span><textarea name="symbols" rows="4" placeholder="例如：000651 600519 000333"></textarea><small>支持空格、逗号或换行分隔，可带 .SH / .SZ 后缀。</small></label></div>
+      <div class="notice" id="workflowNotice"><svg viewBox="0 0 24 24"><path d="M12 3 3 20h18L12 3Z"/><path d="M12 9v4M12 17h.01"/></svg><p><strong id="workflowNoticeTitle">将扫描全市场股票池</strong><br><span id="workflowNoticeDetail">任务会访问已配置的数据源并在后台运行，可能需要较长时间。</span></p></div>
+      <div class="modal-actions"><button type="button" class="secondary-button modal-close">取消</button><button type="submit" class="primary-button" id="workflowSubmit">开始全市场筛选</button></div>
+    </form>
+  </dialog>
+
+  <dialog class="modal small" id="reviewModal">
+    <form id="reviewForm"><div class="modal-header"><div><span class="overline" id="reviewStage">HUMAN REVIEW</span><h2 id="reviewTitle">人工复核</h2><p>人工决定只能维持或下调系统结论。</p></div><button type="button" class="icon-button review-close"><svg viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg></button></div>
+      <input type="hidden" name="stage"><input type="hidden" name="symbol"><input type="hidden" name="assessment_id"><input type="hidden" name="risk_assessment_id">
+      <div class="form-grid"><label><span>复核人</span><input name="reviewer" placeholder="请输入姓名" required></label><label><span>最终决定</span><select name="decision" required><option value="PASS">PASS · 通过</option><option value="REVIEW">REVIEW · 保留</option><option value="REJECT">REJECT · 否决</option></select></label><label class="full"><span>复核理由</span><textarea name="rationale" rows="4" minlength="5" placeholder="记录依据、保留意见或否决原因（至少 5 个字符）" required></textarea></label></div>
+      <div class="modal-actions"><button type="button" class="secondary-button review-close">取消</button><button type="submit" class="primary-button">提交复核</button></div>
+    </form>
+  </dialog>
+
+  <div class="toast-stack" id="toastStack" aria-live="polite"></div>
+  <script src="/app.js" defer></script>
+  <script src="/strategies/golden-pit.js" defer></script>
+</body>
+</html>

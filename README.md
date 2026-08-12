@@ -1,27 +1,27 @@
 # A股黄金坑股票数据库
 
 以“重仓长周期确定性的高赔率”为第一原则，持续识别长期价值仍在、但价格因阶段性
-悲观而明显错位的A股公司。本仓库只保留重构后的正式 Stage A/B/C 工作流。
+悲观而明显错位的A股公司。当前正式策略采用“量化初筛—证据研究—风险终审”工作流。
 
 ## 正式研究链路
 
 ```text
-Stage A：点时、硬条件、失败关闭的客观初筛
-  → Stage B：可复核证据包 + 人机协作研究 + 人工确认
-  → Stage C：行业化风险与价值陷阱过滤 + 人工终审
+量化初筛：点时、硬条件、失败关闭的量化筛选
+  → 证据研究：可复核证据包 + 人机协作研究 + 人工确认
+  → 风险终审：行业化风险与价值陷阱过滤 + 人工终审
 ```
 
 系统不使用机械综合分抵消致命缺陷。业务状态与数据状态分开保存；数据不足进入
 `PENDING_DATA / DATA_ERROR / REVIEW`，不会被解释为通过。
 
-## Stage A：Tier1严格筛选
+## 量化初筛（Tier1）
 
 五项硬条件必须全部明确成立：
 
 1. 点时 `PE(TTM) < 15`；
 2. 税前、已实施、按公司行动调整后的 `股息率(TTM) > 5%`；
-3. 最近3个连续可比单季度的营业收入同比严格逐季改善；
-4. 同一窗口的归母净利润同比严格逐季改善；
+3. 最近2个连续可比单季度的营业收入同比均为正增长；
+4. 同一窗口的归母净利润同比均为正增长；
 5. 截至筛选日不属于ST、*ST或其他风险警示股票。
 
 利润同比窗口任一上年同期归母净利润小于等于0时进入
@@ -34,13 +34,15 @@ python main.py screen-tier1 --as-of 2020-12-31 \
   --universe-file universe_20201231.csv
 python main.py verify-tier1-sources --as-of 2026-08-10 --symbols 000651
 python main.py show-tier1 --run-id RUN_ID
+python main.py resume-tier1 --run-id RUN_ID
+python main.py retry-tier1-data --run-id RUN_ID
 ```
 
-完整口径见 [Stage A说明](docs/stage_a_tier1_v2.md)。
+完整口径见 [量化初筛说明](docs/stage_a_tier1_v2.md)。
 
-## Stage B：SOR3.0人机协作研究
+## 证据研究（Tier2）
 
-Stage B只接收同一运行中的 Stage A `PASS`。每条外部事实必须绑定：
+证据研究只接收同一运行中量化初筛为 `PASS` 的标的。每条外部事实必须绑定：
 
 - 带时区的点时可得时间；
 - 本地证据快照及SHA-256；
@@ -57,12 +59,12 @@ python main.py import-tier2 --file ai_results.json
 python main.py review-tier2 --run-id RUN_ID
 ```
 
-完整契约见 [Stage B说明](docs/stage_b_tier2_human_ai.md) 和
+完整契约见 [证据研究说明](docs/stage_b_tier2_human_ai.md) 和
 [研究提示词](docs/tier2_ai_prompt_template.md)。
 
-## Stage C：行业化风险与价值陷阱过滤
+## 风险终审（Tier3）
 
-Stage C只接收最新 Stage B人工 `PASS`，按一般企业、银行、保险、地产四类模型检查
+风险终审只接收最新证据研究人工 `PASS`，按一般企业、银行、保险、地产四类模型检查
 财务真实性、流动性、分红、治理、周期顶部和结构性价值陷阱。行业分类自身也必须
 经过同样的证据快照验证。
 
@@ -77,7 +79,7 @@ python main.py import-tier3 --file filled_tier3_results.json
 python main.py review-tier3 --run-id RUN_ID
 ```
 
-完整规则见 [Stage C说明](docs/stage_c_tier3_risk_filter.md)。
+完整规则见 [风险终审说明](docs/stage_c_tier3_risk_filter.md)。
 
 ## 快速开始
 
@@ -99,6 +101,50 @@ python main.py workflow --run-id RUN_ID
 
 `workflow` 会汇总A/B/C状态并给出下一条受控操作，不会自动越过AI研究或人工复核。
 
+## Web 研究控制台
+
+项目内置零新增依赖的多策略 Web 研究平台。首页集中展示已注册策略；每个策略拥有
+独立的结果投影和前端展示模块。当前接入的首个策略是黄金坑三阶段流程，可
+查看研究漏斗、候选股详情、数据质量和运行记录，并可一键启动全市场筛选（或指定
+股票）、生成证据研究包以及提交证据研究/风险终审人工复核：
+
+```bash
+python web_app.py
+```
+
+浏览器默认打开 `http://127.0.0.1:8765`。如需指定数据库、端口或禁止自动打开浏览器：
+
+```bash
+python web_app.py --db data/db/golden_pit.db --port 9000 --no-browser
+```
+
+控制台默认仅监听本机回环地址。筛选和证据包导出在后台执行，可在“运行记录”查看
+状态；AI研究 JSON 和行业分类等正式材料仍通过对应 CLI 导入，以保留既有的严格校验
+和证据契约。
+
+平台通过策略注册表隔离数据、策略、执行和展示层。新增策略只需实现稳定策略契约、
+在组合根注册并提供独立前端模块，不需要修改通用 HTTP 路由或后台任务执行器。架构
+和接入说明见 [多策略选股架构](docs/strategy_architecture.md)。
+
+### 断点续跑与数据缺口补跑
+
+量化初筛在开始逐股处理前会固化有序股票池及 SHA-256，随后为每只股票保存
+`PENDING / PROCESSING / COMPLETED / RETRYABLE_FAILED` 状态和追加式尝试记录。
+工作进程通过短期租约和心跳防止同一运行被并发处理：
+
+```bash
+# 仅处理没有完整结束或尚未产生决策的标的
+python main.py resume-tier1 --run-id RUN_ID
+
+# 仅补跑无决策、DATA_ERROR、PENDING_DATA 或异常中断的标的
+python main.py retry-tier1-data --run-id RUN_ID
+```
+
+Web 控制台会在运行停止且租约过期后显示“从断点继续”；完成运行存在数据缺口时
+显示“补跑数据缺口”。续跑沿用原 `run_id`、原配置和原股票池，不重新处理正常完成
+标的。旧版本运行没有股票池快照时，系统只会在重新获取的股票池通过原时点和数量
+校验后建立兼容快照，否则失败关闭。
+
 ## 数据源
 
 | 来源 | 正式用途 | 点时边界 |
@@ -116,11 +162,13 @@ python main.py workflow --run-id RUN_ID
 | 命令 | 作用 |
 |---|---|
 | `workflow` | 启动或检查正式A→B→C工作流 |
-| `screen-tier1` | 执行Stage A严格筛选 |
+| `screen-tier1` | 执行量化初筛 |
 | `verify-tier1-sources` | 多源口径与数值交叉验证 |
-| `show-tier1` | 查看某次Stage A结果 |
-| `export/import/review-tier2` | Stage B证据包、研究导入和人工确认 |
-| `export/import/review-tier3` | Stage C模板、风险导入和人工终审 |
+| `show-tier1` | 查看某次量化初筛结果 |
+| `resume-tier1` | 使用固化股票池跳过已完成标的并断点续跑 |
+| `retry-tier1-data` | 补跑未产生决策或数据状态异常的标的 |
+| `export/import/review-tier2` | 证据研究包、研究导入和人工确认 |
+| `export/import/review-tier3` | 风险终审模板、风险导入和人工终审 |
 | `tier1/2/3-migrate` | 应用或回滚对应阶段迁移 |
 
 ## 项目结构
@@ -130,10 +178,13 @@ config/                         正式阈值、Schema和行业风险规则
 src/data/point_in_time/         AKShare、Tushare、BaoStock点时适配
 src/data/quality/               来源能力、质量评估和闸门
 src/evidence/                   快照、哈希、摘录和事实映射验证
-src/screening/tier1_v2/         Stage A硬筛选
-src/screening/tier2_human_ai/   Stage B证据包和结论状态机
-src/risk/tier3/                 Stage C行业化风险模型
-src/storage/                    Stage A/B/C SQLite仓储
+src/screening/tier1_v2/         量化初筛规则
+src/screening/tier2_human_ai/   证据研究包和结论状态机
+src/risk/tier3/                 风险终审行业化模型
+src/storage/                    三阶段 SQLite 仓储
+src/strategies/                 可注册选股策略、读模型与策略动作
+src/execution/                  策略无关的后台任务执行能力
+src/web/                        多策略Web平台、通用API与独立策略展示模块
 scripts/migrations/             版本化、原子数据库迁移
 tests/                          离线业务测试和实时数据canary
 ```

@@ -89,6 +89,9 @@ def evaluate_tier1(
 
     revenue_sequence = [valid_number(item.revenue_yoy) for item in window]
     parent_np_sequence = [valid_number(item.parent_np_yoy) for item in window]
+    strict_trend = (
+        config.strict_improvement or config.trend_rule == "STRICT_IMPROVEMENT"
+    )
 
     if len(window) == config.trend_quarters and is_consecutive_window(window):
         prior_parent_np = [
@@ -104,7 +107,7 @@ def evaluate_tier1(
             secondary_queues.append("TURNAROUND_WATCHLIST")
         elif any(value is None for value in parent_np_sequence):
             pending.append("parent_np_yoy_sequence")
-        elif not all(
+        elif strict_trend and not all(
             current > previous
             for previous, current in zip(parent_np_sequence, parent_np_sequence[1:])
         ):
@@ -116,6 +119,17 @@ def evaluate_tier1(
                     True,
                 )
             )
+        elif not strict_trend and not all(
+            value > 0 for value in parent_np_sequence
+        ):
+            failures.append(
+                _failure(
+                    "parent_np_yoy_consecutive_positive",
+                    parent_np_sequence,
+                    "each >",
+                    0,
+                )
+            )
 
         if any(value is None for value in prior_revenue):
             pending.append("prior_year_operating_revenue")
@@ -123,7 +137,7 @@ def evaluate_tier1(
             not_comparable.append("收入同比窗口存在上年同期营业收入<=0")
         elif any(value is None for value in revenue_sequence):
             pending.append("revenue_yoy_sequence")
-        elif not all(
+        elif strict_trend and not all(
             current > previous
             for previous, current in zip(revenue_sequence, revenue_sequence[1:])
         ):
@@ -133,6 +147,17 @@ def evaluate_tier1(
                     revenue_sequence,
                     "each_next > previous",
                     True,
+                )
+            )
+        elif not strict_trend and not all(
+            value > 0 for value in revenue_sequence
+        ):
+            failures.append(
+                _failure(
+                    "revenue_yoy_consecutive_positive",
+                    revenue_sequence,
+                    "each >",
+                    0,
                 )
             )
 
